@@ -1,11 +1,23 @@
 import { component } from "./minui.js";
 
-const counter = component(
+component(
+  'fancy-button',
+  '<button on:click={click}>{label}</button>',
+  () => ({
+      label: 'Click!',
+      click() { this.label === 'Click!' ? this.label = 'Clicked!' : this.label = 'Click!'}
+  })
+)
+
+component(
+  'counter',
   `
-    <p>Count: {count}</p>
-    <p>Step: {step}</p>
-    <button on:click={increment}>Increment</button>
-    <button on:mouseenter={decrement}>Decrement</button>
+    <div>
+      <p>Count: {count}</p>
+      <p>Step: {step}</p>
+      <button on:click={increment}>Increment</button>
+      <fancy-button />
+    </div>
   `,
   () => ({
     count: 0,
@@ -15,4 +27,10 @@ const counter = component(
   })
 );
 
-counter().mount(document.body);
+const app = component(
+  'app',
+  '<div><counter></counter></div>',
+  () => ({})
+)
+
+app().mount(document.body);
