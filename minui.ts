@@ -13,7 +13,7 @@ export function component<T extends Record<string, any>>(
     const stateProxy = new Proxy(state(), {
       set(target: T, key: string | symbol, value: any): boolean {
         (target as any)[key] = value;
-        update();
+        updateKey(key.toString());
         return true;
       }
     });
@@ -25,12 +25,13 @@ export function component<T extends Record<string, any>>(
       return [];
     }
 
-    const bindings: { node: Text; key: string, template: string }[] = [];
+    const bindings: Record<string, { node: Text; template: string }> = {};
+
     function walk(node: Node) {
       if (node.nodeType === Node.TEXT_NODE) {
         const match = node.textContent?.match(/\{(.*?)\}/);
         if (match) {
-          bindings.push({ node: node as Text, key: match[1].trim(), template: node.textContent! });
+          bindings[match[1].trim()] = { node: node as Text, template: node.textContent! };
         }
       }
 
@@ -54,7 +55,7 @@ export function component<T extends Record<string, any>>(
           const p = el.parentNode as HTMLElement;
 
           for (const r of childRoots) {
-            p.insertBefore(r,el);
+            p.insertBefore(r, el);
           }
 
           el.remove();
@@ -70,13 +71,17 @@ export function component<T extends Record<string, any>>(
     roots = [...templateElement.content.childNodes];
 
     function update() {
-      bindings.forEach(b => {
-        b.node.data = b.template.replace(
-          new RegExp(`\\{${b.key}\\}`, 'g'),
-          stateProxy[b.key]
-        );
-      });
+      for (const key in bindings) {
+        updateKey(key.toString());
+      }
     }
+
+    function updateKey(key: string) {
+      bindings[key].node.data = bindings[key].template.replace(
+        new RegExp(`\\{${key}\\}`, 'g'),
+        stateProxy[key]
+      );
+    };
 
     update();
 
