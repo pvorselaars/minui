@@ -3,5 +3,6 @@
     "target": "ESNext",
     "module": "ESNext",
     "strict": true,
+    "sourceMap": true
   }
 }

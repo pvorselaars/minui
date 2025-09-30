@@ -10,8 +10,6 @@ export function component<T extends Record<string, any>>(
     const templateElement = document.createElement("template");
     templateElement.innerHTML = template.trim();
 
-    const roots = [...templateElement.content.childNodes];
-
     const stateProxy = new Proxy(state(), {
       set(target: T, key: string | symbol, value: any): boolean {
         (target as any)[key] = value;
@@ -19,6 +17,13 @@ export function component<T extends Record<string, any>>(
         return true;
       }
     });
+
+    function toNodeArray(x: Node | Node[] | NodeList): Node[] {
+      if (x instanceof Node) return [x];
+      if (x instanceof NodeList) return Array.from(x);
+      if (Array.isArray(x)) return x.flatMap(toNodeArray);
+      return [];
+    }
 
     const bindings: { node: Text; key: string, template: string }[] = [];
     function walk(node: Node) {
@@ -45,14 +50,24 @@ export function component<T extends Record<string, any>>(
         const tag = el.tagName.toLowerCase();
         if (components[tag]) {
           const c = components[tag]();
-          el.replaceWith(...(Array.isArray(c.root) ? c.root : [c.root]));
-          if (Array.isArray(c.root)) c.root.forEach(walk);
-          else walk(c.root);
+          const childRoots = toNodeArray(c.root);
+          const p = el.parentNode as HTMLElement;
+
+          for (const r of childRoots) {
+            p.insertBefore(r,el);
+          }
+
+          el.remove();
+          childRoots.forEach(walk);
         }
       }
+
       node.childNodes.forEach(walk);
     }
+
+    let roots = [...templateElement.content.childNodes];
     roots.forEach(walk);
+    roots = [...templateElement.content.childNodes];
 
     function update() {
       bindings.forEach(b => {
@@ -93,7 +108,7 @@ export function router(target: HTMLElement, routes: Record<string, () => any>) {
     }
   }
 
-  window.addEventListener("popState", () => {
+  window.addEventListener("popstate", () => {
     render(window.location.pathname);
   });
 
@@ -102,7 +117,7 @@ export function router(target: HTMLElement, routes: Record<string, () => any>) {
 
 export function navigate(path: string) {
   history.pushState({}, "", path);
-  const event = new PopStateEvent("popState");
+  const event = new PopStateEvent("popstate");
   dispatchEvent(event);
 }
 

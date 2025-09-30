@@ -12,12 +12,10 @@ component(
 component(
   'counter',
   `
-    <div>
-      <p>Count: {count}</p>
-      <p>Step: {step}</p>
-      <button on:click={increment}>Increment</button>
-      <fancy-button />
-    </div>
+    <p>Count: {count}</p>
+    <p>Step: {step}</p>
+    <button on:click={increment}>Increment</button>
+    <fancy-button />
   `,
   () => ({
     count: 0,
@@ -29,14 +27,12 @@ component(
 
 const counters = component(
   'counters',
-  `<div>
-    <counter></counter>
-    <counter></counter>
-    <counter></counter>
-    <counter></counter>
-    <counter></counter>
-    <button href="/" on:click="{go}">Home</button>
-   <div>`,
+  `<counter></counter>
+   <counter></counter>
+   <counter></counter>
+   <counter></counter>
+   <counter></counter>
+   <button href="/" on:click="{go}">Home</button>`,
   () => ({
     go
   })
@@ -44,10 +40,10 @@ const counters = component(
 
 const app = component(
   'app',
-  `<div>
-    <counter></counter>
-    <button href="/counters" on:click="{go}">More counters</button>
-   <div>`,
+  `
+   <counter></counter>
+   <button href="/counters" on:click="{go}">More counters</button>
+   `,
   () => ({
     go
   })
