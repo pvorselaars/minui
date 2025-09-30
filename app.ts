@@ -1,4 +1,4 @@
-import { component } from "./minui.js";
+import { component, router, go } from "./minui.js";
 
 component(
   'fancy-button',
@@ -27,10 +27,35 @@ component(
   })
 );
 
-const app = component(
-  'app',
-  '<div><counter></counter></div>',
-  () => ({})
+const counters = component(
+  'counters',
+  `<div>
+    <counter></counter>
+    <counter></counter>
+    <counter></counter>
+    <counter></counter>
+    <counter></counter>
+    <button href="/" on:click="{go}">Home</button>
+   <div>`,
+  () => ({
+    go
+  })
 )
 
-app().mount(document.body);
+const app = component(
+  'app',
+  `<div>
+    <counter></counter>
+    <button href="/counters" on:click="{go}">More counters</button>
+   <div>`,
+  () => ({
+    go
+  })
+)
+
+export const routes: Record<string, () => any> = {
+  "/": app,
+  "/counters": counters,
+};
+
+router(document.body, routes);
