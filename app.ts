@@ -42,7 +42,7 @@ const counters = component(
 const app = component(
   'app',
   `
-   <counter step=1 @increment={onIncrement} @decrement={onDecrement}></counter>
+   <counter step=1 on:increment={onIncrement} on:decrement={onDecrement}></counter>
    <button href="/counters" on:click={go}>More counters</button>
    `,
   () => ({

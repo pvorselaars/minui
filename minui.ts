@@ -1,7 +1,6 @@
 let currentComponent: any = null;
 const components: Record<string, (input?: any) => any> = {};
 
-
 export function component<T extends Record<string, any>, P = {}>(
   tag: string,
   template: string,
@@ -43,16 +42,6 @@ export function component<T extends Record<string, any>, P = {}>(
 
       if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
-        el.getAttributeNames().forEach(attr => {
-          if (attr.startsWith("on:")) {
-            const event = attr.slice(3);
-            const handler = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
-            if (handler && stateProxy[handler]) {
-              el.addEventListener(event, stateProxy[handler].bind(stateProxy));
-            }
-            el.removeAttribute(attr);
-          }
-        });
 
         const childTag = el.tagName.toLowerCase();
         if (components[childTag] && childTag !== tag) {
@@ -61,8 +50,8 @@ export function component<T extends Record<string, any>, P = {}>(
 
           el.getAttributeNames().forEach(attr => {
 
-            if (attr.startsWith("@")) {
-              const eventName = attr.slice(1);
+            if (attr.startsWith("on:")) {
+              const eventName = attr.slice(3);
               const handlerName = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
               if (handlerName && stateProxy[handlerName]) {
                 eventListeners.push({
@@ -103,6 +92,17 @@ export function component<T extends Record<string, any>, P = {}>(
 
           el.remove();
         }
+
+        el.getAttributeNames().forEach(attr => {
+          if (attr.startsWith("on:")) {
+            const event = attr.slice(3);
+            const handler = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
+            if (handler && stateProxy[handler]) {
+              el.addEventListener(event, stateProxy[handler].bind(stateProxy));
+            }
+            el.removeAttribute(attr);
+          }
+        });
       }
 
       node.childNodes.forEach(walk);
