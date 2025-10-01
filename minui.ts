@@ -1,16 +1,20 @@
 let currentComponent: any = null;
 const components: Record<string, (input?: any) => any> = {};
 
+
 export function component<T extends Record<string, any>, P = {}>(
   tag: string,
   template: string,
-  state: (input?: P) => T,
+  state: (this: T & { emit: (eventName: string, detail?: any) => void}, input?: P) => T
 ) {
+  type State = T & { emit: (eventName: string, detail?: any) => void };
+
   const factory = function (input?: P) {
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
 
-    const merged = {...state(), ...state(input)};
+    const definedInputs = input && Object.keys(input).length > 0 ? input : undefined;
+    const merged = {...state.call({} as any, undefined), ...state.call({} as any, definedInputs)};
 
     const stateProxy = new Proxy(merged, {
       set(target: T, key: string | symbol, value: any): boolean {
@@ -18,7 +22,7 @@ export function component<T extends Record<string, any>, P = {}>(
         updateKey(key.toString());
         return true;
       }
-    });
+    }) as State;
 
     function toNodeArray(x: Node | Node[] | NodeList): Node[] {
       if (x instanceof Node) return [x];
@@ -53,7 +57,21 @@ export function component<T extends Record<string, any>, P = {}>(
         const childTag = el.tagName.toLowerCase();
         if (components[childTag] && childTag !== tag) {
           const childInputs: Record<string, any> = {};
+          const eventListeners: Array<{event: string, handler: Function}> = [];
+
           el.getAttributeNames().forEach(attr => {
+
+            if (attr.startsWith("@")) {
+              const eventName = attr.slice(1);
+              const handlerName = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
+              if (handlerName && stateProxy[handlerName]) {
+                eventListeners.push({
+                  event: eventName,
+                  handler: stateProxy[handlerName].bind(stateProxy)
+                });
+              }
+              return;
+            }
             const value = el.getAttribute(attr)!;
             const bindMatch = value.match(/^\{(.*)\}$/);
             if (bindMatch) {
@@ -70,6 +88,14 @@ export function component<T extends Record<string, any>, P = {}>(
 
           const c = components[childTag](childInputs)
           const childRoots = toNodeArray(c.root);
+
+          eventListeners.forEach(({event, handler}) => {
+            childRoots.forEach(root => {
+              if (root instanceof Element) {
+                root.addEventListener(event, handler as EventListener);
+              }
+            });
+          });
 
           for (const r of childRoots) {
             el.parentNode?.insertBefore(r, el);
@@ -98,6 +124,15 @@ export function component<T extends Record<string, any>, P = {}>(
     };
 
     update();
+
+    Object.defineProperty(stateProxy, 'emit', {
+      value: (name: string, detail?: any) => {
+        root.dispatchEvent(
+          new CustomEvent(name, { detail, bubbles: true })
+        );
+      },
+      enumerable: false
+    });
 
     return {
       root: root,

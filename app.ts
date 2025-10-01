@@ -16,12 +16,13 @@ const counter = component(
     <p>Count: {count}</p>
     <p>Step: {step}</p>
     <button on:click={increment}>Increment</button>
-    <fancy-button label="klik" />
+    <button on:click={decrement}>Decrement</button>
+    <fancy-button />
   `,
   (input: {count: number, step: number} = {count: 10, step: 2}) => ({
     ...input,
-    increment() { this.count += this.step },
-    decrement() { this.count -= this.step }
+    increment() { this.count += this.step; this.emit('increment', this.count) },
+    decrement() { this.count -= this.step; this.emit('decrement', this.count) }
   }),
 );
 
@@ -41,11 +42,13 @@ const counters = component(
 const app = component(
   'app',
   `
-   <counter step=1></counter>
-   <button href="/counters" on:click="{go}">More counters</button>
+   <counter step=1 @increment={onIncrement} @decrement={onDecrement}></counter>
+   <button href="/counters" on:click={go}>More counters</button>
    `,
   () => ({
-    go
+    go,
+    onIncrement(e: CustomEvent) { console.log("Incremented to", e.detail) },
+    onDecrement(e: CustomEvent) { console.log("Decremented to", e.detail) }
   })
 )
 
