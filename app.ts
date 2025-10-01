@@ -3,35 +3,35 @@ import { component, router, go } from "./minui.js";
 component(
   'fancy-button',
   '<button on:click={click}>{label}</button>',
-  () => ({
-      label: 'Click!',
-      click() { this.label === 'Click!' ? this.label = 'Clicked!' : this.label = 'Click!'}
+  (input: { label: string} = {label: 'Click'}) => ({
+      ...input,
+      click() { this.label = this.label === input.label ? input.label+'!' : input.label }
   })
 )
 
-component(
+
+const counter = component(
   'counter',
   `
     <p>Count: {count}</p>
     <p>Step: {step}</p>
     <button on:click={increment}>Increment</button>
-    <fancy-button />
+    <fancy-button label="klik" />
   `,
-  () => ({
-    count: 0,
-    step: 1,
+  (input: {count: number, step: number} = {count: 10, step: 2}) => ({
+    ...input,
     increment() { this.count += this.step },
     decrement() { this.count -= this.step }
-  })
+  }),
 );
 
 const counters = component(
   'counters',
-  `<counter></counter>
+  `<counter step=1></counter>
+   <counter step=2></counter>
    <counter></counter>
-   <counter></counter>
-   <counter></counter>
-   <counter></counter>
+   <counter step=4></counter>
+   <counter step=5></counter>
    <button href="/" on:click="{go}">Home</button>`,
   () => ({
     go
@@ -41,7 +41,7 @@ const counters = component(
 const app = component(
   'app',
   `
-   <counter></counter>
+   <counter step=1></counter>
    <button href="/counters" on:click="{go}">More counters</button>
    `,
   () => ({

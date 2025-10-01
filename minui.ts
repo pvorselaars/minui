@@ -1,16 +1,18 @@
 let currentComponent: any = null;
-const components: Record<string, () => any> = {};
+const components: Record<string, (input?: any) => any> = {};
 
-export function component<T extends Record<string, any>>(
+export function component<T extends Record<string, any>, P = {}>(
   tag: string,
   template: string,
-  state: () => T,
+  state: (input?: P) => T,
 ) {
-  const factory = function () {
-    const templateElement = document.createElement("template");
-    templateElement.innerHTML = template.trim();
+  const factory = function (input?: P) {
+    const root = document.createElement(tag);
+    root.innerHTML = template.trim();
 
-    const stateProxy = new Proxy(state(), {
+    const merged = {...state(), ...state(input)};
+
+    const stateProxy = new Proxy(merged, {
       set(target: T, key: string | symbol, value: any): boolean {
         (target as any)[key] = value;
         updateKey(key.toString());
@@ -48,27 +50,39 @@ export function component<T extends Record<string, any>>(
           }
         });
 
-        const tag = el.tagName.toLowerCase();
-        if (components[tag]) {
-          const c = components[tag]();
+        const childTag = el.tagName.toLowerCase();
+        if (components[childTag] && childTag !== tag) {
+          const childInputs: Record<string, any> = {};
+          el.getAttributeNames().forEach(attr => {
+            const value = el.getAttribute(attr)!;
+            const bindMatch = value.match(/^\{(.*)\}$/);
+            if (bindMatch) {
+              const key = bindMatch[1].trim();
+              childInputs[attr] = stateProxy[key];
+            } else {
+              try {
+                childInputs[attr] = JSON.parse(value);
+              } catch {
+                childInputs[attr] = value;
+              }
+            }
+          });
+
+          const c = components[childTag](childInputs)
           const childRoots = toNodeArray(c.root);
-          const p = el.parentNode as HTMLElement;
 
           for (const r of childRoots) {
-            p.insertBefore(r, el);
+            el.parentNode?.insertBefore(r, el);
           }
 
           el.remove();
-          childRoots.forEach(walk);
         }
       }
 
       node.childNodes.forEach(walk);
     }
 
-    let roots = [...templateElement.content.childNodes];
-    roots.forEach(walk);
-    roots = [...templateElement.content.childNodes];
+    walk(root);
 
     function update() {
       for (const key in bindings) {
@@ -86,9 +100,9 @@ export function component<T extends Record<string, any>>(
     update();
 
     return {
-      root: roots,
+      root: root,
       mount(target: HTMLElement) {
-        roots.forEach(node => target.appendChild(node));
+        target.appendChild(root);
         update();
       },
       state: stateProxy
