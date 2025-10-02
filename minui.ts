@@ -31,6 +31,35 @@ export function component<T extends Record<string, any>, P = {}>(
     }
 
     const bindings: Record<string, { node: Text; template: string }> = {};
+    const conditionals: Array<{
+      placeholder: Comment;
+      template: Element;
+      expression: string;
+      dependencies: string[];
+    }> = [];
+
+    function evaluateExpression(expr: string): any {
+      try {
+        const func = new Function(...Object.keys(stateProxy), `return ${expr}`);
+        return func(...Object.values(stateProxy));
+      } catch (e) {
+        console.error(`Failed to evaluate expression: ${expr}`, e);
+        return false;
+      }
+    }
+
+    function extractDependencies(expr: string): string[] {
+      const deps = new Set<string>();
+      const stateKeys = Object.keys(stateProxy);
+      
+      for (const key of stateKeys) {
+        if (new RegExp(`\\b${key}\\b`).test(expr)) {
+          deps.add(key);
+        }
+      }
+      
+      return Array.from(deps);
+    }
 
     function walk(node: Node) {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -42,6 +71,34 @@ export function component<T extends Record<string, any>, P = {}>(
 
       if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
+
+        if (el.hasAttribute('if')) {
+          const expression = el.getAttribute('if')!.trim();
+          const shouldRender = !!evaluateExpression(expression);
+          
+          const placeholder = document.createComment(`if:${expression}`);
+          el.parentNode?.insertBefore(placeholder, el);
+          
+          const templateClone = el.cloneNode(true) as Element;
+          templateClone.removeAttribute('if');
+          
+          conditionals.push({
+            placeholder,
+            template: templateClone,
+            expression,
+            dependencies: extractDependencies(expression)
+          });
+          
+          el.remove();
+          
+          if (shouldRender) {
+            const rendered = templateClone.cloneNode(true) as Element;
+            placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
+            walk(rendered);
+          }
+          
+          return;
+        }
 
         const childTag = el.tagName.toLowerCase();
         if (components[childTag] && childTag !== tag) {
@@ -96,7 +153,7 @@ export function component<T extends Record<string, any>, P = {}>(
         el.getAttributeNames().forEach(attr => {
           if (attr.startsWith("on:")) {
             const event = attr.slice(3);
-            const handler = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
+            const handler = el.getAttribute(attr)!.trim();
             if (handler && stateProxy[handler]) {
               el.addEventListener(event, stateProxy[handler].bind(stateProxy));
             }
@@ -116,11 +173,30 @@ export function component<T extends Record<string, any>, P = {}>(
       }
     }
 
+    function updateConditionals(changedKey: string) {
+      conditionals.forEach(cond => {
+        if (!cond.dependencies.includes(changedKey)) return;
+        
+        const shouldRender = !!evaluateExpression(cond.expression);
+        const currentlyRendered = cond.placeholder.nextSibling && 
+                                   cond.placeholder.nextSibling.nodeType === Node.ELEMENT_NODE;
+        
+        if (shouldRender && !currentlyRendered) {
+          const rendered = cond.template.cloneNode(true) as Element;
+          cond.placeholder.parentNode?.insertBefore(rendered, cond.placeholder.nextSibling);
+          walk(rendered);
+        } else if (!shouldRender && currentlyRendered) {
+          cond.placeholder.nextSibling?.remove();
+        }
+      });
+    }
+
     function updateKey(key: string) {
       bindings[key].node.data = bindings[key].template.replace(
         new RegExp(`\\{${key}\\}`, 'g'),
         stateProxy[key]
       );
+      updateConditionals(key);
     };
 
     update();

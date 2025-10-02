@@ -2,7 +2,7 @@ import { component, router, go } from "./minui.js";
 
 component(
   'fancy-button',
-  '<button on:click={click}>{label}</button>',
+  '<button on:click=click>{label}</button>',
   (input: { label: string} = {label: 'Click'}) => ({
       ...input,
       click() { this.label = this.label === input.label ? input.label+'!' : input.label }
@@ -15,8 +15,8 @@ const counter = component(
   `
     <p>Count: {count}</p>
     <p>Step: {step}</p>
-    <button on:click={increment}>Increment</button>
-    <button on:click={decrement}>Decrement</button>
+    <button on:click=increment>Increment</button>
+    <button on:click=decrement>Decrement</button>
     <fancy-button />
   `,
   (input: {count: number, step: number} = {count: 10, step: 2}) => ({
@@ -33,7 +33,7 @@ const counters = component(
    <counter></counter>
    <counter step=4></counter>
    <counter step=5></counter>
-   <button href="/" on:click="{go}">Home</button>`,
+   <button href="/" on:click=go>Home</button>`,
   () => ({
     go
   })
@@ -42,13 +42,14 @@ const counters = component(
 const app = component(
   'app',
   `
-   <counter step=1 on:increment={onIncrement} on:decrement={onDecrement}></counter>
-   <button href="/counters" on:click={go}>More counters</button>
+   <counter step=1 on:increment=onIncrement on:decrement=onDecrement></counter>
+   <button if="count > 20" href="/counters" on:click=go>More counters</button>{count}
    `,
   () => ({
     go,
-    onIncrement(e: CustomEvent) { console.log("Incremented to", e.detail) },
-    onDecrement(e: CustomEvent) { console.log("Decremented to", e.detail) }
+    count: 0,
+    onIncrement(e: CustomEvent) { console.log("Incremented to", e.detail); this.count = e.detail },
+    onDecrement(e: CustomEvent) { console.log("Decremented to", e.detail); this.count = e.detail }
   })
 )
 
