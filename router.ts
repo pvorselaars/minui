@@ -1,6 +1,6 @@
 let currentComponent: any = null;
 
-export function router(target: HTMLElement, routes: Record<string, (inputs?: any) => any>) {
+export function router(target: HTMLElement, routes: Record<string, (inputs?: any, routeParams?: any) => any>) {
 
    function parseUrl(url: string) {
     const [path, queryString] = url.split("?");
@@ -14,7 +14,7 @@ export function router(target: HTMLElement, routes: Record<string, (inputs?: any
     return { path, params };
   }
 
-  function render(url: string) {
+  async function render(url: string) {
     const { path, params } = parseUrl(url);
 
     if (currentComponent) {
@@ -23,7 +23,7 @@ export function router(target: HTMLElement, routes: Record<string, (inputs?: any
 
     const factory = routes[path] || routes["/"];
     if (factory) {
-      currentComponent = factory({params});
+      currentComponent = await factory(undefined, params);
       currentComponent.mount(target);
     }
   }

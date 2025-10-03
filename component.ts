@@ -2,39 +2,20 @@ import { go } from "./router";
 
 const components: Record<string, (input?: any) => any> = {};
 
-export function component<T extends Record<string, any>, P = {}>(
+export function component<S>(
   tag: string,
   template: string,
-  state: (this: T & { emit: (eventName: string, detail?: any) => void}, input?: P) => T
+  state: (input?: any) => S
 ) {
-  type State = T & { emit: (eventName: string, detail?: any) => void };
+  type ResolvedState = S extends Promise<infer U> ? U : S;
+  type StateEmitter = ResolvedState & { 
+    emit: (eventName: string, detail?: any) => void
+    [key: string]: any;
+  }
 
-  const factory = function (input?: P) {
+  const factory = async function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
-
-    const fullState: T & { emit: (eventName: string, detail?: any) => void }= {
-      go,
-      ...state.call({} as any, undefined),
-      ...state.call({} as any, input),
-      emit: () => {},
-      ...input
-    }
-
-    const stateProxy = new Proxy(fullState, {
-      set(target: T, key: string | symbol, value: any): boolean {
-        (target as any)[key] = value;
-        updateKey(key.toString());
-        return true;
-      }
-    }) as State;
-
-    function toNodeArray(x: Node | Node[] | NodeList): Node[] {
-      if (x instanceof Node) return [x];
-      if (x instanceof NodeList) return Array.from(x);
-      if (Array.isArray(x)) return x.flatMap(toNodeArray);
-      return [];
-    }
 
     const bindings: Record<string, { node: Text; template: string }> = {};
     const conditionals: Array<{
@@ -58,6 +39,38 @@ export function component<T extends Record<string, any>, P = {}>(
       dependencies: string[];
       style: string;
     }> = [];
+
+    const resolvedState = (await Promise.resolve(state(input))) as ResolvedState;
+
+    const fullState: StateEmitter = {
+      go,
+      ...(resolvedState ?? {}),
+      emit: () => {},
+      ...routeParams
+    };
+
+    const stateProxy = new Proxy(fullState, {
+      set(target: StateEmitter, key: string | symbol, value: any): boolean {
+        (target as any)[key] = value;
+        updateKey(key.toString());
+        return true;
+      }
+    });
+
+    for (const key of Object.keys(fullState)) {
+      const val = (fullState as any)[key];
+      if (typeof val === 'function') {
+        (stateProxy as any)[key] = val.bind(stateProxy);
+      }
+    }
+
+    function toNodeArray(x: Node | Node[] | NodeList): Node[] {
+      if (x instanceof Node) return [x];
+      if (x instanceof NodeList) return Array.from(x);
+      if (Array.isArray(x)) return x.flatMap(toNodeArray);
+      return [];
+    }
+
 
     function evaluateExpression(expr: string, context: Record<string, any> = {}): any {
       try {
