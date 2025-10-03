@@ -13,10 +13,15 @@ export function component<T extends Record<string, any>, P = {}>(
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
 
-    const definedInputs = input && Object.keys(input).length > 0 ? input : undefined;
-    const merged = {go, ...state.call({} as any, undefined), ...state.call({} as any, definedInputs)};
+    const fullState: T & { emit: (eventName: string, detail?: any) => void }= {
+      go,
+      ...state.call({} as any, undefined),
+      ...state.call({} as any, input),
+      emit: () => {},
+      ...input
+    }
 
-    const stateProxy = new Proxy(merged, {
+    const stateProxy = new Proxy(fullState, {
       set(target: T, key: string | symbol, value: any): boolean {
         (target as any)[key] = value;
         updateKey(key.toString());
