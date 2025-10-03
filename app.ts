@@ -1,61 +1,68 @@
-import { component, router, go } from "./minui.js";
+import { component, router } from "./minui.js";
 
 component(
-  'fancy-button',
-  '<button on:click=click>{label}</button>',
-  (input: { label: string} = {label: 'Click'}) => ({
-      ...input,
-      click() { this.label = this.label === input.label ? input.label+'!' : input.label }
+  'todo',
+  `
+    <li><strong>{title}</strong> - {status}</li>
+  `,
+  (input: { title: string, status: string} = {title: "Todo", status: "pending"}) => ({
+    ...input
   })
 )
 
-
-const counter = component(
-  'counter',
+const todos = component(
+  'todos',
   `
-    <p>Count: {count}</p>
-    <p>Step: {step}</p>
-    <button on:click=increment>Increment</button>
-    <button on:click=decrement>Decrement</button>
-    <fancy-button />
+    <h2>Todo List</h2>
+    
+    <input type="text" placeholder="New todo..." id="todoInput" />
+    <button on:click={addTodo}>Add Todo</button>
+    
+    <h3>Tasks ({todos.length}):</h3>
+    <ul>
+      <todo for="todo in todos" title={todo.title} status={todo.status} />
+    </ul>
+    
+    <button on:click=addRandomTodo>Add Random Todo</button>
+    <button on:click=clearCompleted>Clear All</button>
+    
+    <button href="/" on:click=go>Back to Home</button>
   `,
-  (input: {count: number, step: number} = {count: 10, step: 2}) => ({
-    ...input,
-    increment() { this.count += this.step; this.emit('increment', this.count) },
-    decrement() { this.count -= this.step; this.emit('decrement', this.count) }
-  }),
+  () => ({
+    todos: [
+      { title: 'Learn MinUI', status: 'in progress' },
+    ],
+    addTodo() {
+      const input = document.getElementById('todoInput') as HTMLInputElement;
+      if (input && input.value.trim()) {
+        this.todos = [...this.todos, { title: input.value, status: 'pending' }];
+        input.value = '';
+      }
+    },
+    addRandomTodo() {
+      const tasks = ['Write tests', 'Fix bugs', 'Deploy', 'Review PR', 'Update docs'];
+      const task = tasks[Math.floor(Math.random() * tasks.length)];
+      this.todos = [...this.todos, { title: task, status: 'pending' }];
+    },
+    clearCompleted() {
+      this.todos = [];
+    }
+  })
 );
 
-const counters = component(
-  'counters',
-  `<counter step=1></counter>
-   <counter step=2></counter>
-   <counter></counter>
-   <counter step=4></counter>
-   <counter step=5></counter>
-   <button href="/" on:click=go>Home</button>`,
-  () => ({
-    go
-  })
-)
 
 const app = component(
   'app',
   `
-   <counter step=1 on:increment=onIncrement on:decrement=onDecrement></counter>
-   <button if="count > 20" href="/counters" on:click=go>More counters</button>{count}
-   `,
-  () => ({
-    go,
-    count: 0,
-    onIncrement(e: CustomEvent) { console.log("Incremented to", e.detail); this.count = e.detail },
-    onDecrement(e: CustomEvent) { console.log("Decremented to", e.detail); this.count = e.detail }
-  })
-)
+    <button href="/todo" on:click=go>Todo</button>
+  `,
+  () => ({})
+);
 
-export const routes: Record<string, () => any> = {
+const routes: Record<string, () => any> = {
   "/": app,
-  "/counters": counters,
+  "/todo": todos,
 };
 
+document.title = "MinUI";
 router(document.body, routes);
