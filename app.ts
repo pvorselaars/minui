@@ -16,17 +16,17 @@ const todos = component(
     <h2>Todo List</h2>
     
     <input type="text" placeholder="New todo..." bind:value={newTodo}  />
-    <button on:click={addTodo}>Add Todo</button>
+    <button on:click=addTodo()>Add Todo</button>
     
     <h3>Tasks ({todos.length}):</h3>
     <ul>
       <todo for="todo in todos" title={todo.title} status={todo.status} />
     </ul>
     
-    <button on:click=addRandomTodo>Add Random Todo</button>
-    <button on:click=clearCompleted>Clear All</button>
+    <button on:click=addRandomTodo()>Add Random Todo</button>
+    <button on:click=clear()>Clear All</button>
     
-    <button href="/" on:click=go>Back to Home</button>
+    <button on:click=go('/')>Back to Home</button>
   `,
   () => ({
     newTodo: '',
@@ -44,7 +44,7 @@ const todos = component(
       const task = tasks[Math.floor(Math.random() * tasks.length)];
       this.todos = [...this.todos, { title: task, status: 'pending' }];
     },
-    clearCompleted() {
+    clear() {
       this.todos = [];
     }
   })
@@ -54,7 +54,7 @@ const todos = component(
 const app = component(
   'app',
   `
-    <button href="/todo" on:click=go>Todo</button>
+    <button on:click=go('/todo')>Todo</button>
   `,
   () => ({})
 );

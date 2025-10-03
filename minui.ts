@@ -169,11 +169,18 @@ export function component<T extends Record<string, any>, P = {}>(
 
             if (attr.startsWith("on:")) {
               const eventName = attr.slice(3);
-              const handlerName = el.getAttribute(attr)?.trim();
-              if (handlerName && stateProxy[handlerName]) {
+              const expr = el.getAttribute(attr)?.trim();
+              if (expr) {
                 eventListeners.push({
                   event: eventName,
-                  handler: stateProxy[handlerName].bind(stateProxy)
+                  handler: (e: Event) => {
+                    const ctx = { ...stateProxy, ...window, event: e };
+                    try {
+                      new Function(...Object.keys(ctx), `return ${expr}`)(...Object.values(ctx));
+                    } catch (err) {
+                      console.error(`Error evaluating child component event "${expr}":`, err);
+                    }
+                  }
                 });
               }
               return;
@@ -218,15 +225,20 @@ export function component<T extends Record<string, any>, P = {}>(
 
         el.getAttributeNames().forEach(attr => {
           if (attr.startsWith("on:")) {
-            const event = attr.slice(3);
-            const handlerName = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
-            if (handlerName) {
-              if (handlerName in loopContext) {
-                console.warn(`Cannot bind event to loop variable: ${handlerName}`);
-              } else if (stateProxy[handlerName]) {
-                el.addEventListener(event, stateProxy[handlerName].bind(stateProxy));
-              }
-            }
+            const eventName = attr.slice(3);
+            const expr = el.getAttribute(attr)?.trim();
+            if (expr) {
+              el.addEventListener(eventName, (e: Event) => {
+                const ctx = {...stateProxy, ...window, event: e};
+                try {
+                  const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
+                  fn.call(stateProxy, ...Object.values(ctx));
+                } catch (err) {
+                  console.error(`Error evaluating event "${expr}":`, err);
+                }
+              });
+            } 
+        
             el.removeAttribute(attr);
           }
 
@@ -449,8 +461,6 @@ export function navigate(path: string) {
   dispatchEvent(event);
 }
 
-export function go(event: Event) {
-  event.preventDefault();
-  const href = (event.target as HTMLAnchorElement).getAttribute("href")!;
-  navigate(href);
+export function go(path: string) {
+  navigate(path);
 }
