@@ -1,0 +1,25 @@
+{
+  "name": "@pvorselaars/minui",
+  "version": "0.1.2",
+  "description": "A minimal TypeScript UI framework",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "esbuild index.ts --bundle --outfile=dist/index.js --format=esm --sourcemap",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "typescript",
+    "ui",
+    "framework",
+    "minimal"
+  ],
+  "author": "Perry Vorselaars",
+  "license": "MIT",
+  "sideEffects": false,
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "typescript": "^5.2.2"
+  }
+}
