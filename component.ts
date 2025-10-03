@@ -57,13 +57,6 @@ export function component<S>(
       }
     });
 
-    for (const key of Object.keys(fullState)) {
-      const val = (fullState as any)[key];
-      if (typeof val === 'function') {
-        (stateProxy as any)[key] = val.bind(stateProxy);
-      }
-    }
-
     function toNodeArray(x: Node | Node[] | NodeList): Node[] {
       if (x instanceof Node) return [x];
       if (x instanceof NodeList) return Array.from(x);
