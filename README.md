@@ -1,4 +1,17 @@
-import { component, router } from "./minui.js";
+# MinUI
+
+A minimal TypeScript UI framework.
+
+## Installation
+
+```bash
+npm install @pvorselaars/minui
+```
+
+## Usage
+
+```ts
+import { component, router } from "@pvorselaars/minui";
 
 component(
   'todo',
@@ -66,3 +79,4 @@ const routes: Record<string, () => any> = {
 
 document.title = "MinUI";
 router(document.body, routes);
+```
