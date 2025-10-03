@@ -52,6 +52,12 @@ export function component<T extends Record<string, any>, P = {}>(
       dependencies: string[];
       renderedNodes: Node[];
     }> = [];
+    const conditionalVisibilty: Array<{
+      node: HTMLElement;
+      expression: string;
+      dependencies: string[];
+      style: string;
+    }> = [];
 
     function evaluateExpression(expr: string, context: Record<string, any> = {}): any {
       try {
@@ -164,6 +170,17 @@ export function component<T extends Record<string, any>, P = {}>(
           }
           
           return;
+        }
+
+        if (el.hasAttribute("show")) {
+          const expression = el.getAttribute('show')!.replace(/[{}]/g, '').trim();
+          conditionalVisibilty.push({
+            node: el,
+            expression,
+            dependencies: extractDependencies(expression),
+            style: ''
+          });
+          el.removeAttribute("show");
         }
 
         const childTag = el.tagName.toLowerCase();
@@ -370,7 +387,7 @@ export function component<T extends Record<string, any>, P = {}>(
     walk(root);
 
     function update() {
-      for (const key in bindings) {
+      for (const key of Object.keys(stateProxy)) {
         updateKey(key.toString());
       }
     }
@@ -400,6 +417,22 @@ export function component<T extends Record<string, any>, P = {}>(
       });
     }
 
+    function updateVisibility(changedKey: string) {
+      conditionalVisibilty.forEach(cond => {
+        if (!cond.dependencies.includes(changedKey)) return;
+        
+        const shouldShow = !!evaluateExpression(cond.expression);
+        const currentlyShowing = cond.node.style.display !== 'none';
+        
+        if (shouldShow && !currentlyShowing) {
+          cond.node.style.display = cond.style;
+        } else if (!shouldShow && currentlyShowing) {
+          cond.style = cond.node.style.display;
+          cond.node.style.display = 'none';
+        }
+      });
+    }
+
     function updateKey(key: string) {
       for (const bindingKey in bindings) {
         const rootVar = bindingKey.split(/[.\[\(]/)[0];
@@ -413,6 +446,7 @@ export function component<T extends Record<string, any>, P = {}>(
       }
       updateConditionals(key);
       updateLoops(key);
+      updateVisibility(key);
     };
 
     update();
