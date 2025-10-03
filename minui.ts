@@ -229,6 +229,66 @@ export function component<T extends Record<string, any>, P = {}>(
             }
             el.removeAttribute(attr);
           }
+
+          if (attr.startsWith("bind:")) {
+            const prop = attr.slice(5);
+            const stateKey = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
+            
+            if (stateKey && stateKey in stateProxy) {
+              if (el instanceof HTMLInputElement) {
+                if (el.type === 'checkbox') {
+                  el.checked = !!stateProxy[stateKey];
+                } else if (el.type === 'radio') {
+                  el.checked = el.value === stateProxy[stateKey];
+                } else {
+                  el.value = stateProxy[stateKey] ?? '';
+                }
+              } else if (el instanceof HTMLSelectElement) {
+                el.value = stateProxy[stateKey] ?? '';
+              } else if (el instanceof HTMLTextAreaElement) {
+                el.value = stateProxy[stateKey] ?? '';
+              }
+              
+              // Listen for changes
+              const updateState = (e: Event) => {
+                const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+                if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+                  (stateProxy as any)[stateKey] = target.checked;
+                } else if (target instanceof HTMLInputElement && target.type === 'radio') {
+                  if (target.checked) {
+                    (stateProxy as any)[stateKey] = target.value;
+                  }
+                } else {
+                  (stateProxy as any)[stateKey] = target.value;
+                }
+              };
+              
+              el.addEventListener('input', updateState);
+              el.addEventListener('change', updateState);
+              
+              bindings[stateKey] = { node: el as any, template: `{${stateKey}}` };
+
+              bindings[stateKey].node = {
+                set data(value: string) {
+                  if (el instanceof HTMLInputElement) {
+                    if (el.type === 'checkbox') {
+                      el.checked = !!value;
+                    } else if (el.type === 'radio') {
+                      el.checked = el.value === value;
+                    } else {
+                      el.value = value ?? '';
+                    }
+                  } else if (el instanceof HTMLSelectElement) {
+                    el.value = value ?? '';
+                  }
+                }
+              } as any;
+              
+            }
+            
+            el.removeAttribute(attr);
+          }
+
         });
 
         node.childNodes.forEach(child => walk(child, loopContext));

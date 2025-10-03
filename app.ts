@@ -15,7 +15,7 @@ const todos = component(
   `
     <h2>Todo List</h2>
     
-    <input type="text" placeholder="New todo..." id="todoInput" />
+    <input type="text" placeholder="New todo..." bind:value={newTodo}  />
     <button on:click={addTodo}>Add Todo</button>
     
     <h3>Tasks ({todos.length}):</h3>
@@ -29,14 +29,14 @@ const todos = component(
     <button href="/" on:click=go>Back to Home</button>
   `,
   () => ({
+    newTodo: '',
     todos: [
       { title: 'Learn MinUI', status: 'in progress' },
     ],
     addTodo() {
-      const input = document.getElementById('todoInput') as HTMLInputElement;
-      if (input && input.value.trim()) {
-        this.todos = [...this.todos, { title: input.value, status: 'pending' }];
-        input.value = '';
+      if (this.newTodo && this.newTodo.trim()) {
+        this.todos = [...this.todos, { title: this.newTodo, status: 'pending' }];
+        this.newTodo = '';
       }
     },
     addRandomTodo() {
