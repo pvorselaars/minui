@@ -49,13 +49,29 @@ export function component<S>(
       ...routeParams
     };
 
-    const stateProxy = new Proxy(fullState, {
-      set(target: StateEmitter, key: string | symbol, value: any): boolean {
-        (target as any)[key] = value;
-        updateKey(key.toString());
-        return true;
+    function createDeepProxy(obj: any, path: string[] = []): any {
+      if (obj === null || typeof obj !== 'object') {
+        return obj;
       }
-    });
+
+      return new Proxy(obj, {
+        get(target: any, key: string | symbol): any {
+          const value = target[key];
+          if (typeof value === 'object' && value !== null && key !== 'emit') {
+            return createDeepProxy(value, [...path, key.toString()]);
+          }
+          return value;
+        },
+        set(target: any, key: string | symbol, value: any): boolean {
+          target[key] = value;
+          const rootKey = path.length > 0 ? path[0] : key.toString();
+          updateKey(rootKey);
+          return true;
+        }
+      });
+    }
+
+    const stateProxy = createDeepProxy(fullState, []);
 
     function toNodeArray(x: Node | Node[] | NodeList): Node[] {
       if (x instanceof Node) return [x];
@@ -67,21 +83,27 @@ export function component<S>(
 
     function evaluateExpression(expr: string, context: Record<string, any> = {}): any {
       try {
-        const allVars = {...stateProxy, ...context};
-        const func = new Function(...Object.keys(allVars), `return ${expr}`);
-        return func(...Object.values(allVars));
+        const scope = new Proxy({ ...stateProxy, ...context }, {
+          get(target, key: string) {
+            return key in target ? (target as any)[key] : undefined;
+          }
+        });
+
+        return new Function("state", `with(state) { return ${expr} }`)(scope);
       } catch (e) {
         console.error(`Failed to evaluate expression: ${expr}`, e);
-        return false;
+        return undefined;
       }
     }
 
     function extractDependencies(expr: string): string[] {
       const deps = new Set<string>();
       const stateKeys = Object.keys(stateProxy);
+
+      const cleanExpr = expr.replace(/\?\./g, '.');
       
       for (const key of stateKeys) {
-        if (new RegExp(`\\b${key}\\b`).test(expr)) {
+        if (new RegExp(`\\b${key}\\b`).test(cleanExpr)) {
           deps.add(key);
         }
       }
@@ -98,7 +120,8 @@ export function component<S>(
         let result = text;
         for (const match of matches) {
           const key = match.slice(1, -1).trim();
-          const rootVar = key.split(/[.\[\(]/)[0];
+          const cleanKey = key.replace(/\?\./g, '.');
+          const rootVar = cleanKey.split(/[.\[\(]/)[0];
 
           if (rootVar in stateProxy && !(rootVar in loopContext)) {
             bindings[key] = { node: node as Text, template: text };
@@ -441,7 +464,8 @@ export function component<S>(
 
     function updateKey(key: string) {
       for (const bindingKey in bindings) {
-        const rootVar = bindingKey.split(/[.\[\(]/)[0];
+        const cleanKey = bindingKey.replace(/\?\./g, '.');
+        const rootVar = cleanKey.split(/[.\[\(]/)[0];
         if (rootVar === key) {
           const value = evaluateExpression(bindingKey);
           bindings[bindingKey].node.data = bindings[bindingKey].template.replace(
