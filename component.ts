@@ -1,12 +1,17 @@
 import { go } from "./router";
 
 const components: Record<string, (input?: any) => any> = {};
+const styles = new Set<string>();
 
 export function component<S>(
   tag: string,
   template: string,
-  state: (input?: any) => S
+  state: (input?: any) => S,
+  style?: string
 ) {
+  if (components[tag]) throw new Error(`Component '${tag}' already exists!`);
+
+
   type ResolvedState = S extends Promise<infer U> ? U : S;
   type StateEmitter = ResolvedState & { 
     emit: (eventName: string, detail?: any) => void
@@ -16,6 +21,13 @@ export function component<S>(
   const factory = async function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
+
+    if (style && !styles.has(tag)) {
+      styles.add(tag);
+      const styleEl = document.createElement('style');
+      styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (match, brace, selector) => `${brace} ${tag} ${selector.trim()} {`);
+      document.head.appendChild(styleEl);
+    }
 
     const bindings: Record<string, { node: Text; template: string }> = {};
     const conditionals: Array<{
