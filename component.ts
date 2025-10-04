@@ -495,6 +495,9 @@ export function component<S>(
       mount(target: HTMLElement) {
         target.appendChild(root);
         update();
+        if ('mounted' in stateProxy && typeof (stateProxy as any).mounted === 'function') {
+          (stateProxy as any).mounted();
+        }
       },
       state: stateProxy
     };
