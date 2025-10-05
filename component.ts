@@ -58,6 +58,12 @@ export function component<S>(
       dependencies: string[];
       style: string;
     }> = [];
+    const attributeBindings: Array<{
+      element: HTMLElement;
+      attribute: string;
+      template: string;
+      dependencies: string[];
+    }> = [];
 
     const resolvedState = (await Promise.resolve(state(input))) as ResolvedState;
 
@@ -311,9 +317,7 @@ export function component<S>(
             } 
         
             el.removeAttribute(attr);
-          }
-
-          if (attr.startsWith("bind:")) {
+          } else if (attr.startsWith("bind:")) {
             const prop = attr.slice(5);
             const stateKey = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
             
@@ -370,6 +374,30 @@ export function component<S>(
             }
             
             el.removeAttribute(attr);
+          } else {
+              const attrValue = el.getAttribute(attr);
+              if (attrValue && attrValue.match(/\{.*?\}/)) {
+                const dependencies = extractDependencies(attrValue);
+                if (dependencies.length > 0 && !dependencies.some(dep => dep in loopContext)) {
+                  attributeBindings.push({
+                    element: el,
+                    attribute: attr,
+                    template: attrValue,
+                    dependencies
+                  });
+                  
+                  let result = attrValue;
+                  const matches = attrValue.match(/\{(.*?)\}/g);
+                  if (matches) {
+                    for (const match of matches) {
+                      const expr = match.slice(1, -1).trim();
+                      const value = evaluateExpression(expr, loopContext);
+                      result = result.replace(match, String(value ?? ''));
+                    }
+                  }
+                  el.setAttribute(attr, result);
+                }
+              }
           }
 
         });
@@ -440,6 +468,23 @@ export function component<S>(
       }
     }
 
+    function updateAttributes(changedKey: string) {
+      attributeBindings.forEach(binding => {
+        if (!binding.dependencies.includes(changedKey)) return;
+        
+        let result = binding.template;
+        const matches = binding.template.match(/\{(.*?)\}/g);
+        if (matches) {
+          for (const match of matches) {
+            const expr = match.slice(1, -1).trim();
+            const value = evaluateExpression(expr);
+            result = result.replace(match, String(value ?? ''));
+          }
+        }
+        binding.element.setAttribute(binding.attribute, result);
+      });
+    }
+
     function updateConditionals(changedKey: string) {
       conditionals.forEach(cond => {
         if (!cond.dependencies.includes(changedKey)) return;
@@ -496,6 +541,7 @@ export function component<S>(
       updateConditionals(key);
       updateLoops(key);
       updateVisibility(key);
+      updateAttributes(key);
     };
 
     update();
