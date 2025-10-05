@@ -25,7 +25,14 @@ export function component<S>(
     if (style && !styles.has(tag)) {
       styles.add(tag);
       const styleEl = document.createElement('style');
-      styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (match, brace, selector) => `${brace} ${tag} ${selector.trim()} {`);
+      style = style.replace(/:host\b/g, tag);
+      styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (match, brace, selector) => {
+        const trimmed = selector.trim();
+        if (selector.trim().startsWith(tag)){
+          return `${brace}\n${trimmed} {`;
+        }
+        return `${brace}\n${tag} ${trimmed} {`;
+      });
       document.head.appendChild(styleEl);
     }
 
@@ -123,7 +130,7 @@ export function component<S>(
       return Array.from(deps);
     }
 
-    function walk(node: Node, loopContext: Record<string, any> = {}) {
+    async function walk(node: Node, loopContext: Record<string, any> = {}) {
       if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent || '';
         const matches = text.match(/\{(.*?)\}/g);
@@ -265,7 +272,7 @@ export function component<S>(
             }
           });
 
-          const c = components[childTag](childInputs)
+          const c = await components[childTag](childInputs)
           const childRoots = toNodeArray(c.root);
 
           eventListeners.forEach(({event, handler}) => {
