@@ -1,4 +1,5 @@
 import { go } from "./router";
+import { stores, subscribers } from "./store";
 
 const components: Record<string, (input?: any) => any> = {};
 const styles = new Set<string>();
@@ -74,6 +75,14 @@ export function component<S>(
       ...routeParams
     };
 
+    const usedStoreKeys = new Map<any, Set<string>>();
+    const stateStores = new Map<string, any>();
+    Object.entries(fullState).forEach(([key, value]) => {
+      if (value && typeof value === 'object' && stores.has(value)) {
+        stateStores.set(key, value);
+      }
+    });
+
     function createDeepProxy(obj: any, path: string[] = []): any {
       if (obj === null || typeof obj !== 'object') {
         return obj;
@@ -90,6 +99,17 @@ export function component<S>(
         set(target: any, key: string | symbol, value: any): boolean {
           target[key] = value;
           const rootKey = path.length > 0 ? path[0] : key.toString();
+
+          
+          if (stores.has(target)) {
+            const subscribersMap = subscribers.get(target);
+            if (subscribersMap && typeof key === 'string') {
+              const keySubscribers = subscribersMap.get(key);
+              if (keySubscribers) {
+                keySubscribers.forEach(callback => callback());
+              }
+            }
+          }
           updateKey(rootKey);
           return true;
         }
@@ -129,7 +149,21 @@ export function component<S>(
       
       for (const key of stateKeys) {
         if (new RegExp(`\\b${key}\\b`).test(cleanExpr)) {
-          deps.add(key);
+          
+          const store = stateStores.get(key);
+          if (store) {
+            const storeAccessPattern = new RegExp(`\\b${key}\\.(\\w+)`, 'g');
+            let match = storeAccessPattern.exec(cleanExpr);
+            if (match !== null) {
+              if (!usedStoreKeys.has(store)) {
+                usedStoreKeys.set(store, new Set());
+              }
+              usedStoreKeys.get(store)!.add(match[1]);
+              deps.add(match[1]);
+            }
+          } else {
+            deps.add(key);
+          }
         }
       }
       
@@ -148,7 +182,18 @@ export function component<S>(
           const cleanKey = key.replace(/\?\./g, '.');
           const rootVar = cleanKey.split(/[.\[\(]/)[0];
 
-          if (rootVar in stateProxy && !(rootVar in loopContext)) {
+          const store = stateStores.get(rootVar);
+          if (store) {
+            const storeAccessPattern = new RegExp(`\\b${rootVar}\\.(\\w+)`, 'g');
+            let match = storeAccessPattern.exec(cleanKey);
+            if (match !== null) {
+              if (!usedStoreKeys.has(store)) {
+                usedStoreKeys.set(store, new Set());
+              }
+              usedStoreKeys.get(store)!.add(match[1]);
+              bindings[match[1]] = { node: node as Text, template: text };
+            }
+          } else if (rootVar in stateProxy && !(rootVar in loopContext)) {
             bindings[key] = { node: node as Text, template: text };
           }
 
@@ -375,29 +420,29 @@ export function component<S>(
             
             el.removeAttribute(attr);
           } else {
-              const attrValue = el.getAttribute(attr);
-              if (attrValue && attrValue.match(/\{.*?\}/)) {
-                const dependencies = extractDependencies(attrValue);
-                if (dependencies.length > 0 && !dependencies.some(dep => dep in loopContext)) {
-                  attributeBindings.push({
-                    element: el,
-                    attribute: attr,
-                    template: attrValue,
-                    dependencies
-                  });
-                  
-                  let result = attrValue;
-                  const matches = attrValue.match(/\{(.*?)\}/g);
-                  if (matches) {
-                    for (const match of matches) {
-                      const expr = match.slice(1, -1).trim();
-                      const value = evaluateExpression(expr, loopContext);
-                      result = result.replace(match, String(value ?? ''));
-                    }
+            const attrValue = el.getAttribute(attr);
+            if (attrValue && attrValue.match(/\{.*?\}/)) {
+              const dependencies = extractDependencies(attrValue);
+              if (dependencies.length > 0 && !dependencies.some(dep => dep in loopContext)) {
+                attributeBindings.push({
+                  element: el,
+                  attribute: attr,
+                  template: attrValue,
+                  dependencies
+                });
+                
+                let result = attrValue;
+                const matches = attrValue.match(/\{(.*?)\}/g);
+                if (matches) {
+                  for (const match of matches) {
+                    const expr = match.slice(1, -1).trim();
+                    const value = evaluateExpression(expr, loopContext);
+                    result = result.replace(match, String(value ?? ''));
                   }
-                  el.setAttribute(attr, result);
                 }
+                el.setAttribute(attr, result);
               }
+            }
           }
 
         });
@@ -468,23 +513,6 @@ export function component<S>(
       }
     }
 
-    function updateAttributes(changedKey: string) {
-      attributeBindings.forEach(binding => {
-        if (!binding.dependencies.includes(changedKey)) return;
-        
-        let result = binding.template;
-        const matches = binding.template.match(/\{(.*?)\}/g);
-        if (matches) {
-          for (const match of matches) {
-            const expr = match.slice(1, -1).trim();
-            const value = evaluateExpression(expr);
-            result = result.replace(match, String(value ?? ''));
-          }
-        }
-        binding.element.setAttribute(binding.attribute, result);
-      });
-    }
-
     function updateConditionals(changedKey: string) {
       conditionals.forEach(cond => {
         if (!cond.dependencies.includes(changedKey)) return;
@@ -526,6 +554,23 @@ export function component<S>(
       });
     }
 
+    function updateAttributes(changedKey: string) {
+      attributeBindings.forEach(binding => {
+        if (!binding.dependencies.includes(changedKey)) return;
+        
+        let result = binding.template;
+        const matches = binding.template.match(/\{(.*?)\}/g);
+        if (matches) {
+          for (const match of matches) {
+            const expr = match.slice(1, -1).trim();
+            const value = evaluateExpression(expr);
+            result = result.replace(match, String(value ?? ''));
+          }
+        }
+        binding.element.setAttribute(binding.attribute, result);
+      });
+    }
+
     function updateKey(key: string) {
       for (const bindingKey in bindings) {
         const cleanKey = bindingKey.replace(/\?\./g, '.');
@@ -546,6 +591,21 @@ export function component<S>(
 
     update();
 
+    const unsubscribers: Array<() => void> = [];
+    usedStoreKeys.forEach((keys, store) => {
+      const subscribersMap = subscribers.get(store);
+      if (subscribersMap) {
+        keys.forEach(key => {
+          if (!subscribersMap.has(key)) {
+            subscribersMap.set(key, new Set());
+          }
+          const callback = () => updateKey(key);
+          subscribersMap.get(key)!.add(callback);
+          unsubscribers.push(() => subscribersMap.get(key)?.delete(callback));
+        });
+      }
+    });
+
     Object.defineProperty(stateProxy, 'emit', {
       value: (name: string, detail?: any) => {
         root.dispatchEvent(
@@ -564,7 +624,13 @@ export function component<S>(
           (stateProxy as any).mounted();
         }
       },
-      state: stateProxy
+      state: stateProxy,
+      unmount() {
+        unsubscribers.forEach(unsub => unsub());
+        if ('unmounted' in stateProxy && typeof (stateProxy as any).unmounted === 'function') {
+          (stateProxy as any).unmounted();
+        }
+      }
     };
   };
 
