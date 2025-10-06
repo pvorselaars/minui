@@ -448,27 +448,49 @@ export function component<S>(
     }
 
     function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
-      // Remove old nodes
-      loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
-      loopData.renderedNodes = [];
+        const nodesToRemove = new Set(loopData.renderedNodes);
+        
+        for (let i = conditionals.length - 1; i >= 0; i--) {
+          const placeholder = conditionals[i].placeholder;
+          for (const node of nodesToRemove) {
+            if (node.contains(placeholder)) {
+              conditionals.splice(i, 1);
+              break;
+            }
+          }
+        }
+        
+        for (let i = loops.length - 1; i >= 0; i--) {
+          if (loops[i] === loopData) continue; // Don't remove self
+          const placeholder = loops[i].placeholder;
+          for (const node of nodesToRemove) {
+            if (node.contains(placeholder)) {
+              loops.splice(i, 1);
+              break;
+            }
+          }
+        }
+        
+        loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
+        loopData.renderedNodes = [];
 
-      const array = evaluateExpression(loopData.arrayExpr, parentContext);
-      if (!Array.isArray(array)) return;
+        const array = evaluateExpression(loopData.arrayExpr, parentContext);
+        if (!Array.isArray(array)) return;
 
-      array.forEach((item, index) => {
-        const context = { ...parentContext, [loopData.itemVar]: item };
-        if (loopData.indexVar) context[loopData.indexVar] = index;
+        array.forEach((item, index) => {
+          const context = { ...parentContext, [loopData.itemVar]: item };
+          if (loopData.indexVar) context[loopData.indexVar] = index;
 
-        const fragment = document.createDocumentFragment();
-        const rendered = loopData.template.cloneNode(true) as Element;
-        fragment.appendChild(rendered);
+          const fragment = document.createDocumentFragment();
+          const rendered = loopData.template.cloneNode(true) as Element;
+          fragment.appendChild(rendered);
 
-        walk(rendered, context);
+          walk(rendered, context);
 
-        loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
+          loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
 
-        loopData.renderedNodes.push(rendered); // track the top element only
-      });
+          loopData.renderedNodes.push(rendered);
+        });
     }
 
     walk(root);
