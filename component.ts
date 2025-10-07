@@ -43,6 +43,7 @@ export function component<S>(
       template: Element;
       expression: string;
       dependencies: string[];
+      context: Record<string, any>;
     }> = [];
     const loops: Array<{
       placeholder: Comment;
@@ -232,9 +233,7 @@ export function component<S>(
             };
             
             loops.push(loopData);
-            if (el.parentNode) {
-              el.parentNode.removeChild(el);
-            }
+            el.remove();
             
             renderLoop(loopData, loopContext);
             return;
@@ -255,7 +254,8 @@ export function component<S>(
             placeholder,
             template: templateClone,
             expression,
-            dependencies: extractDependencies(expression)
+            dependencies: extractDependencies(expression),
+            context: loopContext
           });
           
           if (el.parentNode) {
@@ -298,7 +298,8 @@ export function component<S>(
                   handler: (e: Event) => {
                     const ctx = { ...stateProxy, ...window, event: e };
                     try {
-                      new Function(...Object.keys(ctx), `return ${expr}`)(...Object.values(ctx));
+                      const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
+                      fn.call(stateProxy, ...Object.values(ctx));
                     } catch (err) {
                       console.error(`Error evaluating child component event "${expr}":`, err);
                     }
@@ -334,13 +335,8 @@ export function component<S>(
             });
           });
 
-          for (const r of childRoots) {
-            el.parentNode?.insertBefore(r, el);
-          }
-
-          if (el.parentNode) {
-            el.parentNode.removeChild(el);
-          }
+          c.mount(el.parentElement, el);
+          el.remove();
 
           return;
         }
@@ -351,7 +347,7 @@ export function component<S>(
             const expr = el.getAttribute(attr)?.trim();
             if (expr) {
               el.addEventListener(eventName, (e: Event) => {
-                const ctx = {...stateProxy, ...window, event: e};
+                const ctx = {...stateProxy, ...loopContext, ...window, event: e};
                 try {
                   const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
                   fn.call(stateProxy, ...Object.values(ctx));
@@ -447,62 +443,54 @@ export function component<S>(
 
         });
 
-        node.childNodes.forEach(child => walk(child, loopContext));
+        Array.from(node.childNodes).forEach(child => walk(child, loopContext));
       }
     }
 
     function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
-      loopData.renderedNodes.forEach(node => {
-        if (node.parentNode) {
-          node.parentNode.removeChild(node);
-        }
-      });
-
-      loopData.renderedNodes = [];
-      
-      const array = evaluateExpression(loopData.arrayExpr, parentContext);
-      
-      if (!Array.isArray(array)) {
-        console.warn(`For loop expression did not return an array: ${loopData.arrayExpr}`);
-        return;
-      }
-      
-      array.forEach((item, index) => {
-        const context = {
-          ...parentContext,
-          [loopData.itemVar]: item
-        };
+        const nodesToRemove = new Set(loopData.renderedNodes);
         
-        if (loopData.indexVar) {
-          context[loopData.indexVar] = index;
-        }
-        
-        const rendered = loopData.template.cloneNode(true) as Element;
-        const parent = loopData.placeholder.parentNode;
-        if (!parent) return;
-        
-        const marker = document.createComment('loop-item-start');
-        parent.insertBefore(marker, loopData.placeholder.nextSibling);
-        
-        parent.insertBefore(rendered, marker.nextSibling);
-        
-        walk(rendered, context);
-        
-        const insertedNodes: Node[] = [];
-        let current = marker.nextSibling;
-        while (current) {
-          if (current.nodeType === Node.COMMENT_NODE && 
-              (current.textContent === 'loop-item-start' || current === loopData.placeholder)) {
-            break;
+        for (let i = conditionals.length - 1; i >= 0; i--) {
+          const placeholder = conditionals[i].placeholder;
+          for (const node of nodesToRemove) {
+            if (node.contains(placeholder)) {
+              conditionals.splice(i, 1);
+              break;
+            }
           }
-          insertedNodes.push(current);
-          current = current.nextSibling;
         }
         
-        parent.removeChild(marker);
+        for (let i = loops.length - 1; i >= 0; i--) {
+          if (loops[i] === loopData) continue; // Don't remove self
+          const placeholder = loops[i].placeholder;
+          for (const node of nodesToRemove) {
+            if (node.contains(placeholder)) {
+              loops.splice(i, 1);
+              break;
+            }
+          }
+        }
         
-        loopData.renderedNodes.push(...insertedNodes);
-      });
+        loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
+        loopData.renderedNodes = [];
+
+        const array = evaluateExpression(loopData.arrayExpr, parentContext);
+        if (!Array.isArray(array)) return;
+
+        array.forEach((item, index) => {
+          const context = { ...parentContext, [loopData.itemVar]: item };
+          if (loopData.indexVar) context[loopData.indexVar] = index;
+
+          const fragment = document.createDocumentFragment();
+          const rendered = loopData.template.cloneNode(true) as Element;
+          fragment.appendChild(rendered);
+
+          walk(rendered, context);
+
+          loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
+
+          loopData.renderedNodes.push(rendered);
+        });
     }
 
     walk(root);
@@ -517,14 +505,14 @@ export function component<S>(
       conditionals.forEach(cond => {
         if (!cond.dependencies.includes(changedKey)) return;
         
-        const shouldRender = !!evaluateExpression(cond.expression);
+        const shouldRender = !!evaluateExpression(cond.expression, cond.context);
         const currentlyRendered = cond.placeholder.nextSibling && 
                                    cond.placeholder.nextSibling.nodeType === Node.ELEMENT_NODE;
         
         if (shouldRender && !currentlyRendered) {
           const rendered = cond.template.cloneNode(true) as Element;
           cond.placeholder.parentNode?.insertBefore(rendered, cond.placeholder.nextSibling);
-          walk(rendered);
+          walk(rendered, cond.context);
         } else if (!shouldRender && currentlyRendered) {
           cond.placeholder.nextSibling?.remove();
         }
@@ -617,8 +605,12 @@ export function component<S>(
 
     return {
       root: root,
-      mount(target: HTMLElement) {
-        target.appendChild(root);
+      mount(target: HTMLElement, before?: HTMLElement) {
+        if (before) {
+          target.insertBefore(root, before);
+        } else {
+          target.appendChild(root);
+        }
         update();
         if ('mounted' in stateProxy && typeof (stateProxy as any).mounted === 'function') {
           (stateProxy as any).mounted();
