@@ -443,7 +443,7 @@ export function component<S>(
 
         });
 
-        node.childNodes.forEach(child => walk(child, loopContext));
+        Array.from(node.childNodes).forEach(child => walk(child, loopContext));
       }
     }
 
