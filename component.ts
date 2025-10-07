@@ -4,6 +4,22 @@ import { stores, subscribers } from "./store";
 const components: Record<string, (input?: any) => any> = {};
 const styles = new Set<string>();
 
+function registerStyle(tag: string, style?: string) {
+  if (style && !styles.has(tag)) {
+    styles.add(tag);
+    const styleEl = document.createElement('style');
+    style = style.replace(/:host\b/g, tag);
+    styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (brace, selector) => {
+      const trimmed = selector.trim();
+      if (selector.trim().startsWith(tag)){
+        return `${brace}\n${trimmed} {`;
+      }
+      return `${brace}\n${tag} ${trimmed} {`;
+    });
+    document.head.appendChild(styleEl);
+  }
+}
+
 export function component<S>(
   tag: string,
   template: string,
@@ -12,6 +28,7 @@ export function component<S>(
 ) {
   if (components[tag]) throw new Error(`Component '${tag}' already exists!`);
 
+  registerStyle(tag, style);
 
   type ResolvedState = S extends Promise<infer U> ? U : S;
   type StateEmitter = ResolvedState & { 
@@ -22,20 +39,6 @@ export function component<S>(
   const factory = async function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
-
-    if (style && !styles.has(tag)) {
-      styles.add(tag);
-      const styleEl = document.createElement('style');
-      style = style.replace(/:host\b/g, tag);
-      styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (match, brace, selector) => {
-        const trimmed = selector.trim();
-        if (selector.trim().startsWith(tag)){
-          return `${brace}\n${trimmed} {`;
-        }
-        return `${brace}\n${tag} ${trimmed} {`;
-      });
-      document.head.appendChild(styleEl);
-    }
 
     const bindings: Record<string, { node: Text; template: string }> = {};
     const conditionals: Array<{
