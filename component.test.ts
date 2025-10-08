@@ -55,7 +55,15 @@ describe("component()", () => {
       "styled-component",
       `<p>Styled</p>`,
       () => ({}),
-      `:host { color: red; }`
+      `
+      :host { 
+        color: red; 
+      }
+      h,
+      p {
+        color: blue;
+      }
+      `
     );
 
     await factory();
@@ -63,7 +71,16 @@ describe("component()", () => {
 
     const styleTags = document.head.querySelectorAll("style");
     expect(styleTags.length).toBe(1);
-    expect(styleTags[0].textContent).toBe("styled-component { color: red; }");
+    expect(styleTags[0].textContent).toBe(
+      `
+      styled-component { 
+        color: red; 
+      }
+      styled-component h,
+      styled-component p {
+        color: blue;
+      }
+      `);
   });
 
   test("should support event binding", async () => {

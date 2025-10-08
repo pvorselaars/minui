@@ -8,13 +8,15 @@ function registerStyle(tag: string, style?: string) {
   if (style && !styles.has(tag)) {
     styles.add(tag);
     const styleEl = document.createElement('style');
-    style = style.trim().replace(/:host\b/g, tag);
-    styleEl.textContent = style.replace(/(^|\})\s*([\s\S]+?)\s*\{/g, (_, brace, selector) => {
-      const trimmed = selector.trim();
-      if (selector.trim().startsWith(tag)){
-        return `${trimmed} {`;
-      }
-      return `${brace}; ${tag} ${trimmed} {`;
+    styleEl.textContent = style.replace(/(^|\})\s*([^{}]+)\s*\{/g, (_, brace, selector) => {
+      const parts = selector.split(","); 
+      const transformed = parts.map((s: any) => {
+        if (s.startsWith(":host")) return s.replace(":host", tag);
+        return `${tag} ${s}`;
+      });
+      const indent = "      ";
+      const joined = transformed.map((s: any) => `${indent}${s}`).join(",\n");
+      return `${brace}\n${joined}{`;
     });
     document.head.appendChild(styleEl);
   }
@@ -412,7 +414,7 @@ export function component<S>(
             const expr = el.getAttribute(attr);
             if (expr) {
               const result = evaluateExpression(expr);
-              if (result) {
+              if (result !== undefined) {
                 const dependencies = extractDependencies(expr);
                 if (dependencies.length > 0) {
                   attributeBindings.push({
