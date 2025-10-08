@@ -63,7 +63,7 @@ describe("component()", () => {
 
     const styleTags = document.head.querySelectorAll("style");
     expect(styleTags.length).toBe(1);
-    expect(styleTags[0].textContent).toContain("styled-component");
+    expect(styleTags[0].textContent).toBe("styled-component { color: red; }");
   });
 
   test("should support event binding", async () => {
@@ -162,7 +162,7 @@ describe("if", () => {
 
     const factory = component(
         "if",
-        `<p if="{show}">Visible</p>`,
+        `<p if=show>Visible</p>`,
         () => ({ show: true })
     );
 
@@ -197,7 +197,7 @@ describe("show", () => {
 
     const factory = component(
     "show",
-    `<div show="{visible}">Hello</div>`,
+    `<div show=visible>Hello</div>`,
     () => ({ visible: true })
     );
 
@@ -333,6 +333,35 @@ describe("bind", () => {
         Object.defineProperty(event, 'target', { value: textarea, writable: false });
         textarea.dispatchEvent(event);
 
-        expect(textarea.value).toBe("User typed");
+        expect(state.message).toBe("User typed");
+    });
+});
+
+describe("attribute binding", () => {
+
+    const factory = component(
+    "btn",
+    `<button disabled=disabled>Click!</button>`,
+    () => ({ disabled: true })
+    );
+
+    test("should evaluate expression for attribute", async () => {
+        const { root, mount } = await factory();
+        mount(document.body);
+
+        const btn = root.querySelector("button")!;
+        expect(btn.disabled).toBe(true);
+    });
+
+    test("state change should update attribute", async () => {
+        const { root, mount, state } = await factory();
+        mount(document.body);
+
+        const btn = root.querySelector("button")!;
+        expect(btn.disabled).toBe(true);
+
+        state.disabled = false;
+        expect(btn.disabled).toBe(false);
+
     });
 });
