@@ -29,7 +29,6 @@ export async function router(target: HTMLElement, routes: Record<string, (inputs
   }
 
   window.addEventListener("popstate", async () => {
-    console.log(window.location.pathname);
     await render(window.location.pathname + window.location.search);
   });
 
