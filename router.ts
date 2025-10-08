@@ -1,6 +1,6 @@
 let currentComponent: any = null;
 
-export function router(target: HTMLElement, routes: Record<string, (inputs?: any, routeParams?: any) => any>) {
+export async function router(target: HTMLElement, routes: Record<string, (inputs?: any, routeParams?: any) => any>) {
 
    function parseUrl(url: string) {
     const [path, queryString] = url.split("?");
@@ -18,7 +18,7 @@ export function router(target: HTMLElement, routes: Record<string, (inputs?: any
     const { path, params } = parseUrl(url);
 
     if (currentComponent) {
-      target.innerHTML = "";
+      currentComponent.unmount();
     }
 
     const factory = routes[path] || routes["/"];
@@ -28,15 +28,17 @@ export function router(target: HTMLElement, routes: Record<string, (inputs?: any
     }
   }
 
-  window.addEventListener("popstate", () => {
-    render(window.location.pathname + window.location.search);
+  window.addEventListener("popstate", async () => {
+    await render(window.location.pathname + window.location.search);
   });
 
-  render(window.location.pathname + window.location.search);
+  await render(window.location.pathname + window.location.search);
 }
 
-export function go(path: string) {
+export async function go(path: string) {
   history.pushState({}, "", path);
-  const event = new PopStateEvent("popstate");
-  dispatchEvent(event);
+  const event = new Event("popstate", { bubbles: true });
+  window.dispatchEvent(event);
+
+  await Promise.resolve();
 }

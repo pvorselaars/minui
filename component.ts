@@ -4,6 +4,22 @@ import { stores, subscribers } from "./store";
 const components: Record<string, (input?: any) => any> = {};
 const styles = new Set<string>();
 
+function registerStyle(tag: string, style?: string) {
+  if (style && !styles.has(tag)) {
+    styles.add(tag);
+    const styleEl = document.createElement('style');
+    style = style.replace(/:host\b/g, tag);
+    styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (brace, selector) => {
+      const trimmed = selector.trim();
+      if (selector.trim().startsWith(tag)){
+        return `${brace}\n${trimmed} {`;
+      }
+      return `${brace}\n${tag} ${trimmed} {`;
+    });
+    document.head.appendChild(styleEl);
+  }
+}
+
 export function component<S>(
   tag: string,
   template: string,
@@ -12,6 +28,7 @@ export function component<S>(
 ) {
   if (components[tag]) throw new Error(`Component '${tag}' already exists!`);
 
+  registerStyle(tag, style);
 
   type ResolvedState = S extends Promise<infer U> ? U : S;
   type StateEmitter = ResolvedState & { 
@@ -23,21 +40,12 @@ export function component<S>(
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
 
-    if (style && !styles.has(tag)) {
-      styles.add(tag);
-      const styleEl = document.createElement('style');
-      style = style.replace(/:host\b/g, tag);
-      styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (match, brace, selector) => {
-        const trimmed = selector.trim();
-        if (selector.trim().startsWith(tag)){
-          return `${brace}\n${trimmed} {`;
-        }
-        return `${brace}\n${tag} ${trimmed} {`;
-      });
-      document.head.appendChild(styleEl);
-    }
+    const bindings: Array<{ 
+      node: HTMLElement;
+      template: string;
+      dependencies: string[];
+    }> = [];
 
-    const bindings: Record<string, { node: Text; template: string }> = {};
     const conditionals: Array<{
       placeholder: Comment;
       template: Element;
@@ -45,6 +53,7 @@ export function component<S>(
       dependencies: string[];
       context: Record<string, any>;
     }> = [];
+
     const loops: Array<{
       placeholder: Comment;
       template: Element;
@@ -54,12 +63,14 @@ export function component<S>(
       dependencies: string[];
       renderedNodes: Node[];
     }> = [];
+
     const conditionalVisibilty: Array<{
       node: HTMLElement;
       expression: string;
       dependencies: string[];
       style: string;
     }> = [];
+
     const attributeBindings: Array<{
       element: HTMLElement;
       attribute: string;
@@ -100,7 +111,6 @@ export function component<S>(
         set(target: any, key: string | symbol, value: any): boolean {
           target[key] = value;
           const rootKey = path.length > 0 ? path[0] : key.toString();
-
           
           if (stores.has(target)) {
             const subscribersMap = subscribers.get(target);
@@ -125,7 +135,6 @@ export function component<S>(
       if (Array.isArray(x)) return x.flatMap(toNodeArray);
       return [];
     }
-
 
     function evaluateExpression(expr: string, context: Record<string, any> = {}): any {
       try {
@@ -192,10 +201,10 @@ export function component<S>(
                 usedStoreKeys.set(store, new Set());
               }
               usedStoreKeys.get(store)!.add(match[1]);
-              bindings[match[1]] = { node: node as Text, template: text };
+              bindings.push({node: node as HTMLElement, template: text, dependencies: [match[1]]});
             }
           } else if (rootVar in stateProxy && !(rootVar in loopContext)) {
-            bindings[key] = { node: node as Text, template: text };
+            bindings.push({node: node as HTMLElement, template: text, dependencies: [key]});
           }
 
           const value = evaluateExpression(key, loopContext);
@@ -206,6 +215,37 @@ export function component<S>(
 
       if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
+
+        if (el.hasAttribute('if')) {
+          const expression = el.getAttribute('if')!.replace(/[{}]/g, '').trim();
+          const shouldRender = !!evaluateExpression(expression, loopContext);
+          
+          const placeholder = document.createComment(`if:${expression}`);
+          el.parentNode?.insertBefore(placeholder, el);
+          
+          const templateClone = el.cloneNode(true) as Element;
+          templateClone.removeAttribute('if');
+          
+          conditionals.push({
+            placeholder,
+            template: templateClone,
+            expression,
+            dependencies: extractDependencies(expression),
+            context: loopContext
+          });
+          
+          if (el.parentNode) {
+            el.parentNode.removeChild(el);
+          }
+          
+          if (shouldRender) {
+            const rendered = templateClone.cloneNode(true) as Element;
+            placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
+            walk(rendered, loopContext);
+          }
+          
+          return;
+        }
 
         if (el.hasAttribute('for')) {
           const forExpr = el.getAttribute('for')!.trim();
@@ -240,36 +280,6 @@ export function component<S>(
           }
         }
 
-        if (el.hasAttribute('if')) {
-          const expression = el.getAttribute('if')!.replace(/[{}]/g, '').trim();
-          const shouldRender = !!evaluateExpression(expression, loopContext);
-          
-          const placeholder = document.createComment(`if:${expression}`);
-          el.parentNode?.insertBefore(placeholder, el);
-          
-          const templateClone = el.cloneNode(true) as Element;
-          templateClone.removeAttribute('if');
-          
-          conditionals.push({
-            placeholder,
-            template: templateClone,
-            expression,
-            dependencies: extractDependencies(expression),
-            context: loopContext
-          });
-          
-          if (el.parentNode) {
-            el.parentNode.removeChild(el);
-          }
-          
-          if (shouldRender) {
-            const rendered = templateClone.cloneNode(true) as Element;
-            placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
-            walk(rendered, loopContext);
-          }
-          
-          return;
-        }
 
         if (el.hasAttribute("show")) {
           const expression = el.getAttribute('show')!.replace(/[{}]/g, '').trim();
@@ -280,6 +290,47 @@ export function component<S>(
             style: ''
           });
           el.removeAttribute("show");
+        }
+
+        if (el.hasAttribute("bind")) {
+          const stateKey = el.getAttribute('bind')!.trim();
+          if (stateKey && stateKey in stateProxy) {
+            if (el instanceof HTMLInputElement) {
+              if (el.type === 'checkbox') {
+                el.checked = !!stateProxy[stateKey];
+              } else if (el.type === 'radio') {
+                el.checked = el.value === stateProxy[stateKey];
+              } else {
+                el.value = stateProxy[stateKey] ?? '';
+              }
+            } else if (el instanceof HTMLSelectElement) {
+              el.value = stateProxy[stateKey] ?? '';
+            } else if (el instanceof HTMLTextAreaElement) {
+              el.value = stateProxy[stateKey] ?? '';
+            }
+            
+            const updateState = (e: Event) => {
+              const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+              if (target instanceof HTMLInputElement) {
+                if (target.type === 'checkbox') {
+                  stateProxy[stateKey] = target.checked;
+                } else if (target.type === 'radio') {
+                  stateProxy[stateKey] = target.checked ? target.value : '';
+                } else {
+                  stateProxy[stateKey] = target.value;
+                }
+              } else {
+                stateProxy[stateKey] = target.value;
+              }
+            };
+            
+            el.addEventListener('input', updateState);
+            el.addEventListener('change', updateState);
+            
+            bindings.push({node: el, template: `{${stateKey}}`, dependencies: [stateKey] });
+            
+          }
+          el.removeAttribute("bind");
         }
 
         const childTag = el.tagName.toLowerCase();
@@ -358,63 +409,6 @@ export function component<S>(
             } 
         
             el.removeAttribute(attr);
-          } else if (attr.startsWith("bind:")) {
-            const prop = attr.slice(5);
-            const stateKey = el.getAttribute(attr)?.replace(/[{}]/g, "").trim();
-            
-            if (stateKey && stateKey in stateProxy) {
-              if (el instanceof HTMLInputElement) {
-                if (el.type === 'checkbox') {
-                  el.checked = !!stateProxy[stateKey];
-                } else if (el.type === 'radio') {
-                  el.checked = el.value === stateProxy[stateKey];
-                } else {
-                  el.value = stateProxy[stateKey] ?? '';
-                }
-              } else if (el instanceof HTMLSelectElement) {
-                el.value = stateProxy[stateKey] ?? '';
-              } else if (el instanceof HTMLTextAreaElement) {
-                el.value = stateProxy[stateKey] ?? '';
-              }
-              
-              // Listen for changes
-              const updateState = (e: Event) => {
-                const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-                if (target instanceof HTMLInputElement && target.type === 'checkbox') {
-                  (stateProxy as any)[stateKey] = target.checked;
-                } else if (target instanceof HTMLInputElement && target.type === 'radio') {
-                  if (target.checked) {
-                    (stateProxy as any)[stateKey] = target.value;
-                  }
-                } else {
-                  (stateProxy as any)[stateKey] = target.value;
-                }
-              };
-              
-              el.addEventListener('input', updateState);
-              el.addEventListener('change', updateState);
-              
-              bindings[stateKey] = { node: el as any, template: `{${stateKey}}` };
-
-              bindings[stateKey].node = {
-                set data(value: string) {
-                  if (el instanceof HTMLInputElement) {
-                    if (el.type === 'checkbox') {
-                      el.checked = !!value;
-                    } else if (el.type === 'radio') {
-                      el.checked = el.value === value;
-                    } else {
-                      el.value = value ?? '';
-                    }
-                  } else if (el instanceof HTMLSelectElement) {
-                    el.value = value ?? '';
-                  }
-                }
-              } as any;
-              
-            }
-            
-            el.removeAttribute(attr);
           } else {
             const attrValue = el.getAttribute(attr);
             if (attrValue && attrValue.match(/\{.*?\}/)) {
@@ -477,29 +471,23 @@ export function component<S>(
         const array = evaluateExpression(loopData.arrayExpr, parentContext);
         if (!Array.isArray(array)) return;
 
+        const fragment = document.createDocumentFragment();
+
         array.forEach((item, index) => {
           const context = { ...parentContext, [loopData.itemVar]: item };
           if (loopData.indexVar) context[loopData.indexVar] = index;
 
-          const fragment = document.createDocumentFragment();
           const rendered = loopData.template.cloneNode(true) as Element;
-          fragment.appendChild(rendered);
-
           walk(rendered, context);
-
-          loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
+          fragment.appendChild(rendered);
 
           loopData.renderedNodes.push(rendered);
         });
+        
+        loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
     }
 
     walk(root);
-
-    function update() {
-      for (const key of Object.keys(stateProxy)) {
-        updateKey(key.toString());
-      }
-    }
 
     function updateConditionals(changedKey: string) {
       conditionals.forEach(cond => {
@@ -559,23 +547,52 @@ export function component<S>(
       });
     }
 
-    function updateKey(key: string) {
-      for (const bindingKey in bindings) {
-        const cleanKey = bindingKey.replace(/\?\./g, '.');
-        const rootVar = cleanKey.split(/[.\[\(]/)[0];
-        if (rootVar === key) {
-          const value = evaluateExpression(bindingKey);
-          bindings[bindingKey].node.data = bindings[bindingKey].template.replace(
-            new RegExp(`\\{${bindingKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`, 'g'),
-            value
-          );
+    function updateBindings(changedKey: string) {
+      bindings.forEach(binding => {
+        if (!binding.dependencies.includes(changedKey)) return;
+
+        const el = binding.node as HTMLElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+        let result = binding.template;
+        const matches = binding.template.match(/\{(.*?)\}/g);
+        if (matches) {
+          for (const match of matches) {
+            const expr = match.slice(1, -1).trim();
+            const value = evaluateExpression(expr);
+            result = result.replace(match, String(value ?? ''));
+          }
         }
-      }
+
+        if (el instanceof HTMLInputElement) {
+          if (el.type === "checkbox") {
+            el.checked = !!evaluateExpression(binding.dependencies[0]); // boolean
+          } else if (el.type === "radio") {
+            el.checked = el.value === evaluateExpression(binding.dependencies[0]);
+          } else {
+            el.value = result;
+          }
+        } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+          el.value = result;
+        } else if ("data" in el) {
+          // for text nodes
+          (el as any).data = result;
+        }
+      });
+    }
+
+    function updateKey(key: string) {
+      updateBindings(key);
       updateConditionals(key);
       updateLoops(key);
       updateVisibility(key);
       updateAttributes(key);
     };
+
+    function update() {
+      for (const key of Object.keys(stateProxy)) {
+        updateKey(key.toString());
+      }
+    }
 
     update();
 
@@ -618,6 +635,7 @@ export function component<S>(
       },
       state: stateProxy,
       unmount() {
+        root.parentElement?.removeChild(root);
         unsubscribers.forEach(unsub => unsub());
         if ('unmounted' in stateProxy && typeof (stateProxy as any).unmounted === 'function') {
           (stateProxy as any).unmounted();
