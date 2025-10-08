@@ -20,7 +20,7 @@ describe("store registration", () => {
   test("registering the same store twice does not duplicate", () => {
     const store = { value: 42 };
     registerStore(store);
-    registerStore(store); // second registration
+    registerStore(store);                       // second registration
 
     expect(stores.size).toBe(1);                // still only one store
     expect(subscribers.size).toBe(1);           // only one subscriber map
@@ -68,7 +68,6 @@ describe("store reactive system", () => {
 
     // Simulate store update
     store.count = 5;
-    // Trigger subscribers manually (like your component proxy would)
     subscribers.get(store)?.get("count")?.forEach(cb => cb());
 
     expect(updatedValue).toBe(5);

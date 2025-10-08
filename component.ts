@@ -635,6 +635,7 @@ export function component<S>(
       },
       state: stateProxy,
       unmount() {
+        root.parentElement?.removeChild(root);
         unsubscribers.forEach(unsub => unsub());
         if ('unmounted' in stateProxy && typeof (stateProxy as any).unmounted === 'function') {
           (stateProxy as any).unmounted();
