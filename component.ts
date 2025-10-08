@@ -8,13 +8,13 @@ function registerStyle(tag: string, style?: string) {
   if (style && !styles.has(tag)) {
     styles.add(tag);
     const styleEl = document.createElement('style');
-    style = style.replace(/:host\b/g, tag);
-    styleEl.textContent = style.replace(/(^|\})\s*([^{\}]+)\s*\{/g, (brace, selector) => {
+    style = style.trim().replace(/:host\b/g, tag);
+    styleEl.textContent = style.replace(/(^|\})\s*([\s\S]+?)\s*\{/g, (_, brace, selector) => {
       const trimmed = selector.trim();
       if (selector.trim().startsWith(tag)){
-        return `${brace}\n${trimmed} {`;
+        return `${trimmed} {`;
       }
-      return `${brace}\n${tag} ${trimmed} {`;
+      return `${brace}; ${tag} ${trimmed} {`;
     });
     document.head.appendChild(styleEl);
   }

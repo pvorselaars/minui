@@ -63,7 +63,7 @@ describe("component()", () => {
 
     const styleTags = document.head.querySelectorAll("style");
     expect(styleTags.length).toBe(1);
-    expect(styleTags[0].textContent).toContain("styled-component");
+    expect(styleTags[0].textContent).toBe("styled-component { color: red; }");
   });
 
   test("should support event binding", async () => {
@@ -333,6 +333,6 @@ describe("bind", () => {
         Object.defineProperty(event, 'target', { value: textarea, writable: false });
         textarea.dispatchEvent(event);
 
-        expect(textarea.value).toBe("User typed");
+        expect(state.message).toBe("User typed");
     });
 });
