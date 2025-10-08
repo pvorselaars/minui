@@ -74,7 +74,7 @@ export function component<S>(
     const attributeBindings: Array<{
       element: HTMLElement;
       attribute: string;
-      template: string;
+      expression: string;
       dependencies: string[];
     }> = [];
 
@@ -145,8 +145,7 @@ export function component<S>(
         });
 
         return new Function("state", `with(state) { return ${expr} }`)(scope);
-      } catch (e) {
-        console.error(`Failed to evaluate expression: ${expr}`, e);
+      } catch {
         return undefined;
       }
     }
@@ -217,7 +216,7 @@ export function component<S>(
         const el = node as HTMLElement;
 
         if (el.hasAttribute('if')) {
-          const expression = el.getAttribute('if')!.replace(/[{}]/g, '').trim();
+          const expression = el.getAttribute('if')!.trim();
           const shouldRender = !!evaluateExpression(expression, loopContext);
           
           const placeholder = document.createComment(`if:${expression}`);
@@ -282,7 +281,7 @@ export function component<S>(
 
 
         if (el.hasAttribute("show")) {
-          const expression = el.getAttribute('show')!.replace(/[{}]/g, '').trim();
+          const expression = el.getAttribute('show')!.trim();
           conditionalVisibilty.push({
             node: el,
             expression,
@@ -410,27 +409,21 @@ export function component<S>(
         
             el.removeAttribute(attr);
           } else {
-            const attrValue = el.getAttribute(attr);
-            if (attrValue && attrValue.match(/\{.*?\}/)) {
-              const dependencies = extractDependencies(attrValue);
-              if (dependencies.length > 0 && !dependencies.some(dep => dep in loopContext)) {
-                attributeBindings.push({
-                  element: el,
-                  attribute: attr,
-                  template: attrValue,
-                  dependencies
-                });
+            const expr = el.getAttribute(attr);
+            if (expr) {
+              const result = evaluateExpression(expr);
+              if (result) {
+                const dependencies = extractDependencies(expr);
+                if (dependencies.length > 0) {
+                  attributeBindings.push({
+                    element: el,
+                    attribute: attr,
+                    expression: expr,
+                    dependencies
+                  });
                 
-                let result = attrValue;
-                const matches = attrValue.match(/\{(.*?)\}/g);
-                if (matches) {
-                  for (const match of matches) {
-                    const expr = match.slice(1, -1).trim();
-                    const value = evaluateExpression(expr, loopContext);
-                    result = result.replace(match, String(value ?? ''));
-                  }
+                  el.setAttribute(attr, result);
                 }
-                el.setAttribute(attr, result);
               }
             }
           }
@@ -534,16 +527,13 @@ export function component<S>(
       attributeBindings.forEach(binding => {
         if (!binding.dependencies.includes(changedKey)) return;
         
-        let result = binding.template;
-        const matches = binding.template.match(/\{(.*?)\}/g);
-        if (matches) {
-          for (const match of matches) {
-            const expr = match.slice(1, -1).trim();
-            const value = evaluateExpression(expr);
-            result = result.replace(match, String(value ?? ''));
-          }
+        const result = evaluateExpression(binding.expression);
+        const booleanAttributes = new Set(["disabled", "readonly", "checked", "selected"]);
+        if (booleanAttributes.has(binding.attribute)) {
+          binding.element.toggleAttribute(binding.attribute, !!result);
+        } else {
+          binding.element.setAttribute(binding.attribute, result);
         }
-        binding.element.setAttribute(binding.attribute, result);
       });
     }
 

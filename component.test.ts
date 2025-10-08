@@ -162,7 +162,7 @@ describe("if", () => {
 
     const factory = component(
         "if",
-        `<p if="{show}">Visible</p>`,
+        `<p if=show>Visible</p>`,
         () => ({ show: true })
     );
 
@@ -197,7 +197,7 @@ describe("show", () => {
 
     const factory = component(
     "show",
-    `<div show="{visible}">Hello</div>`,
+    `<div show=visible>Hello</div>`,
     () => ({ visible: true })
     );
 
@@ -334,5 +334,34 @@ describe("bind", () => {
         textarea.dispatchEvent(event);
 
         expect(state.message).toBe("User typed");
+    });
+});
+
+describe("attribute binding", () => {
+
+    const factory = component(
+    "btn",
+    `<button disabled=disabled>Click!</button>`,
+    () => ({ disabled: true })
+    );
+
+    test("should evaluate expression for attribute", async () => {
+        const { root, mount } = await factory();
+        mount(document.body);
+
+        const btn = root.querySelector("button")!;
+        expect(btn.disabled).toBe(true);
+    });
+
+    test("state change should update attribute", async () => {
+        const { root, mount, state } = await factory();
+        mount(document.body);
+
+        const btn = root.querySelector("button")!;
+        expect(btn.disabled).toBe(true);
+
+        state.disabled = false;
+        expect(btn.disabled).toBe(false);
+
     });
 });
