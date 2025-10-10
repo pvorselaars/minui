@@ -8,13 +8,16 @@ function registerStyle(tag: string, style?: string) {
   if (style && !styles.has(tag)) {
     styles.add(tag);
     const styleEl = document.createElement('style');
-    style = style.trim().replace(/:host\b/g, tag);
-    styleEl.textContent = style.replace(/(^|\})\s*([\s\S]+?)\s*\{/g, (_, brace, selector) => {
-      const trimmed = selector.trim();
-      if (selector.trim().startsWith(tag)){
-        return `${trimmed} {`;
-      }
-      return `${brace}; ${tag} ${trimmed} {`;
+    styleEl.textContent = style.replace(/(^|\})\s*([^{}]+)\s*\{/g, (_, brace, selector) => {
+      const parts = selector.split(","); 
+      const transformed = parts.map((s: any) => {
+        s = s.trim();
+        if (s.startsWith(":host")) return s.replace(":host", tag);
+        return `${tag} ${s}`;
+      });
+      const indent = "      ";
+      const joined = transformed.join(",\n" + indent);
+      return `${brace}\n${indent}${joined} {`;
     });
     document.head.appendChild(styleEl);
   }
@@ -78,7 +81,7 @@ export function component<S>(
       dependencies: string[];
     }> = [];
 
-    const resolvedState = (await Promise.resolve(state(input))) as ResolvedState;
+    const resolvedState = state(input) as ResolvedState;
 
     const fullState: StateEmitter = {
       go,
@@ -109,8 +112,22 @@ export function component<S>(
           return value;
         },
         set(target: any, key: string | symbol, value: any): boolean {
-          target[key] = value;
+          if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof RegExp)) {
+            target[key] = value;
+
+            const newPath = [...path, key.toString()];
+            Object.defineProperty(target, key, {
+              value: createDeepProxy(value, newPath),
+              writable: true,
+              enumerable: true,
+              configurable: true
+            });
+          } else {
+            target[key] = value;
+          }
+          
           const rootKey = path.length > 0 ? path[0] : key.toString();
+          const fullPath = [...path, key.toString()].join('.');
           
           if (stores.has(target)) {
             const subscribersMap = subscribers.get(target);
@@ -121,13 +138,47 @@ export function component<S>(
               }
             }
           }
+          
           updateKey(rootKey);
+          
+          if (fullPath !== rootKey) {
+            updateKey(fullPath);
+          }
+          
+          for (let i = 1; i < path.length; i++) {
+            const intermediatePath = path.slice(0, i + 1).join('.');
+            updateKey(intermediatePath);
+          }
+          
           return true;
         }
       });
     }
 
     const stateProxy = createDeepProxy(fullState, []);
+
+    Object.defineProperty(stateProxy, 'getByPath', {
+      value: (pathString: string) => {
+        return pathString.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
+      },
+      enumerable: false,
+      writable: false
+    });
+
+    Object.defineProperty(stateProxy, 'setByPath', {
+      value: (pathString: string, value: any) => {
+        const keys = pathString.split('.');
+        const lastKey = keys.pop()!;
+        const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
+        if (parent && typeof parent === 'object') {
+          parent[lastKey] = value;
+          return true;
+        }
+        return false;
+      },
+      enumerable: false,
+      writable: false
+    });
 
     function toNodeArray(x: Node | Node[] | NodeList): Node[] {
       if (x instanceof Node) return [x];
@@ -157,21 +208,31 @@ export function component<S>(
       const cleanExpr = expr.replace(/\?\./g, '.');
       
       for (const key of stateKeys) {
-        if (new RegExp(`\\b${key}\\b`).test(cleanExpr)) {
+        const regex = new RegExp(`\\b${key}(?:\\.(\\w+(?:\\.\\w+)*))?\\b`, 'g');
+        let match;
+        
+        while ((match = regex.exec(cleanExpr)) !== null) {
+          const propertyPath = match[1];
           
-          const store = stateStores.get(key);
-          if (store) {
-            const storeAccessPattern = new RegExp(`\\b${key}\\.(\\w+)`, 'g');
-            let match = storeAccessPattern.exec(cleanExpr);
-            if (match !== null) {
+          if (propertyPath) {
+            const fullPath = `${key}.${propertyPath}`;
+            deps.add(fullPath);
+            
+            const store = stateStores.get(key);
+            if (store) {
+              const firstProp = propertyPath.split('.')[0];
               if (!usedStoreKeys.has(store)) {
                 usedStoreKeys.set(store, new Set());
               }
-              usedStoreKeys.get(store)!.add(match[1]);
-              deps.add(match[1]);
+              usedStoreKeys.get(store)!.add(firstProp);
             }
           } else {
-            deps.add(key);
+            const store = stateStores.get(key);
+            if (store) {
+              deps.add(key);
+            } else {
+              deps.add(key);
+            }
           }
         }
       }
@@ -240,7 +301,7 @@ export function component<S>(
           if (shouldRender) {
             const rendered = templateClone.cloneNode(true) as Element;
             placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
-            walk(rendered, loopContext);
+            await walk(rendered, loopContext);
           }
           
           return;
@@ -274,11 +335,10 @@ export function component<S>(
             loops.push(loopData);
             el.remove();
             
-            renderLoop(loopData, loopContext);
+            await renderLoop(loopData, loopContext);
             return;
           }
         }
-
 
         if (el.hasAttribute("show")) {
           const expression = el.getAttribute('show')!.trim();
@@ -292,45 +352,44 @@ export function component<S>(
         }
 
         if (el.hasAttribute("bind")) {
-          const stateKey = el.getAttribute('bind')!.trim();
-          if (stateKey && stateKey in stateProxy) {
-            if (el instanceof HTMLInputElement) {
-              if (el.type === 'checkbox') {
-                el.checked = !!stateProxy[stateKey];
-              } else if (el.type === 'radio') {
-                el.checked = el.value === stateProxy[stateKey];
-              } else {
-                el.value = stateProxy[stateKey] ?? '';
-              }
-            } else if (el instanceof HTMLSelectElement) {
-              el.value = stateProxy[stateKey] ?? '';
-            } else if (el instanceof HTMLTextAreaElement) {
-              el.value = stateProxy[stateKey] ?? '';
+          const key = el.getAttribute('bind')!.trim();
+          const val = stateProxy.getByPath(key);
+          if (el instanceof HTMLInputElement) {
+            if (el.type === 'checkbox') {
+              el.checked = !!val;
+            } else if (el.type === 'radio') {
+              el.checked = el.value === val;
+            } else {
+              el.value = val ?? '';
             }
-            
-            const updateState = (e: Event) => {
-              const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-              if (target instanceof HTMLInputElement) {
-                if (target.type === 'checkbox') {
-                  stateProxy[stateKey] = target.checked;
-                } else if (target.type === 'radio') {
-                  stateProxy[stateKey] = target.checked ? target.value : '';
-                } else {
-                  stateProxy[stateKey] = target.value;
-                }
-              } else {
-                stateProxy[stateKey] = target.value;
-              }
-            };
-            
-            el.addEventListener('input', updateState);
-            el.addEventListener('change', updateState);
-            
-            bindings.push({node: el, template: `{${stateKey}}`, dependencies: [stateKey] });
-            
+          } else if (el instanceof HTMLSelectElement) {
+            el.value = val ?? '';
+          } else if (el instanceof HTMLTextAreaElement) {
+            el.value = val ?? '';
           }
-          el.removeAttribute("bind");
+          
+          const updateState = (e: Event) => {
+            const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+            if (target instanceof HTMLInputElement) {
+              if (target.type === 'checkbox') {
+                stateProxy.setByPath(key, target.checked);
+              } else if (target.type === 'radio') {
+                stateProxy.setByPath(key, target.checked ? target.value : '');
+              } else {
+                stateProxy.setByPath(key, target.value);
+              }
+            } else {
+              stateProxy.setByPath(key, target.value);
+            }
+          };
+          
+          el.addEventListener('input', updateState);
+          el.addEventListener('change', updateState);
+          
+          const dependencies = extractDependencies(key);
+          bindings.push({node: el, template: `{${key}}`, dependencies });
         }
+        el.removeAttribute("bind");
 
         const childTag = el.tagName.toLowerCase();
         if (components[childTag] && childTag !== tag) {
@@ -338,7 +397,6 @@ export function component<S>(
           const eventListeners: Array<{event: string, handler: Function}> = [];
 
           el.getAttributeNames().forEach(attr => {
-
             if (attr.startsWith("on:")) {
               const eventName = attr.slice(3);
               const expr = el.getAttribute(attr)?.trim();
@@ -374,7 +432,7 @@ export function component<S>(
             }
           });
 
-          const c = await components[childTag](childInputs)
+          const c = await components[childTag](childInputs);
           const childRoots = toNodeArray(c.root);
 
           eventListeners.forEach(({event, handler}) => {
@@ -405,14 +463,13 @@ export function component<S>(
                   console.error(`Error evaluating event "${expr}":`, err);
                 }
               });
-            } 
-        
+            }
             el.removeAttribute(attr);
           } else {
             const expr = el.getAttribute(attr);
             if (expr) {
               const result = evaluateExpression(expr);
-              if (result) {
+              if (result !== undefined) {
                 const dependencies = extractDependencies(expr);
                 if (dependencies.length > 0) {
                   attributeBindings.push({
@@ -421,66 +478,65 @@ export function component<S>(
                     expression: expr,
                     dependencies
                   });
-                
                   el.setAttribute(attr, result);
                 }
               }
             }
           }
-
         });
 
-        Array.from(node.childNodes).forEach(child => walk(child, loopContext));
+        for (const child of Array.from(node.childNodes)) {
+          await walk(child, loopContext);
+        }
       }
     }
 
-    function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
-        const nodesToRemove = new Set(loopData.renderedNodes);
-        
-        for (let i = conditionals.length - 1; i >= 0; i--) {
-          const placeholder = conditionals[i].placeholder;
-          for (const node of nodesToRemove) {
-            if (node.contains(placeholder)) {
-              conditionals.splice(i, 1);
-              break;
-            }
+    async function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
+      const nodesToRemove = new Set(loopData.renderedNodes);
+      
+      for (let i = conditionals.length - 1; i >= 0; i--) {
+        const placeholder = conditionals[i].placeholder;
+        for (const node of nodesToRemove) {
+          if (node.contains(placeholder)) {
+            conditionals.splice(i, 1);
+            break;
           }
         }
-        
-        for (let i = loops.length - 1; i >= 0; i--) {
-          if (loops[i] === loopData) continue; // Don't remove self
-          const placeholder = loops[i].placeholder;
-          for (const node of nodesToRemove) {
-            if (node.contains(placeholder)) {
-              loops.splice(i, 1);
-              break;
-            }
+      }
+      
+      for (let i = loops.length - 1; i >= 0; i--) {
+        if (loops[i] === loopData) continue;
+        const placeholder = loops[i].placeholder;
+        for (const node of nodesToRemove) {
+          if (node.contains(placeholder)) {
+            loops.splice(i, 1);
+            break;
           }
         }
-        
-        loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
-        loopData.renderedNodes = [];
+      }
+      
+      loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
+      loopData.renderedNodes = [];
 
-        const array = evaluateExpression(loopData.arrayExpr, parentContext);
-        if (!Array.isArray(array)) return;
+      const array = evaluateExpression(loopData.arrayExpr, parentContext);
+      if (!Array.isArray(array)) return;
 
-        const fragment = document.createDocumentFragment();
+      const fragment = document.createDocumentFragment();
 
-        array.forEach((item, index) => {
-          const context = { ...parentContext, [loopData.itemVar]: item };
-          if (loopData.indexVar) context[loopData.indexVar] = index;
+      for (let index = 0; index < array.length; index++) {
+        const item = array[index];
+        const context = { ...parentContext, [loopData.itemVar]: item };
+        if (loopData.indexVar) context[loopData.indexVar] = index;
+        const rendered = loopData.template.cloneNode(true) as Element;
+        await walk(rendered, context);
+        fragment.appendChild(rendered);
+        loopData.renderedNodes.push(rendered);
+      }
 
-          const rendered = loopData.template.cloneNode(true) as Element;
-          walk(rendered, context);
-          fragment.appendChild(rendered);
-
-          loopData.renderedNodes.push(rendered);
-        });
-        
-        loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
+      loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
     }
 
-    walk(root);
+    await walk(root);
 
     function updateConditionals(changedKey: string) {
       conditionals.forEach(cond => {
@@ -488,12 +544,12 @@ export function component<S>(
         
         const shouldRender = !!evaluateExpression(cond.expression, cond.context);
         const currentlyRendered = cond.placeholder.nextSibling && 
-                                   cond.placeholder.nextSibling.nodeType === Node.ELEMENT_NODE;
+                                  cond.placeholder.nextSibling.nodeType === Node.ELEMENT_NODE;
         
         if (shouldRender && !currentlyRendered) {
           const rendered = cond.template.cloneNode(true) as Element;
           cond.placeholder.parentNode?.insertBefore(rendered, cond.placeholder.nextSibling);
-          walk(rendered, cond.context);
+          walkSync(rendered, cond.context);
         } else if (!shouldRender && currentlyRendered) {
           cond.placeholder.nextSibling?.remove();
         }
@@ -503,8 +559,189 @@ export function component<S>(
     function updateLoops(changedKey: string) {
       loops.forEach(loopData => {
         if (!loopData.dependencies.includes(changedKey)) return;
-        renderLoop(loopData);
+        renderLoopSync(loopData);
       });
+    }
+
+    function renderLoopSync(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
+      const nodesToRemove = new Set(loopData.renderedNodes);
+      
+      for (let i = conditionals.length - 1; i >= 0; i--) {
+        const placeholder = conditionals[i].placeholder;
+        for (const node of nodesToRemove) {
+          if (node.contains(placeholder)) {
+            conditionals.splice(i, 1);
+            break;
+          }
+        }
+      }
+      
+      for (let i = loops.length - 1; i >= 0; i--) {
+        if (loops[i] === loopData) continue;
+        const placeholder = loops[i].placeholder;
+        for (const node of nodesToRemove) {
+          if (node.contains(placeholder)) {
+            loops.splice(i, 1);
+            break;
+          }
+        }
+      }
+      
+      loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
+      loopData.renderedNodes = [];
+
+      const array = evaluateExpression(loopData.arrayExpr, parentContext);
+      if (!Array.isArray(array)) return;
+
+      const fragment = document.createDocumentFragment();
+
+      for (let index = 0; index < array.length; index++) {
+        const item = array[index];
+        const context = { ...parentContext, [loopData.itemVar]: item };
+        if (loopData.indexVar) context[loopData.indexVar] = index;
+        const rendered = loopData.template.cloneNode(true) as Element;
+        walkSync(rendered, context);
+        fragment.appendChild(rendered);
+        loopData.renderedNodes.push(rendered);
+      }
+
+      loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
+    }
+
+    function walkSync(node: Node, loopContext: Record<string, any> = {}) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent || '';
+        const matches = text.match(/\{(.*?)\}/g);
+        if (!matches) return;
+
+        let result = text;
+        for (const match of matches) {
+          const key = match.slice(1, -1).trim();
+          const cleanKey = key.replace(/\?\./g, '.');
+          const rootVar = cleanKey.split(/[.\[\(]/)[0];
+
+          const store = stateStores.get(rootVar);
+          if (store) {
+            const storeAccessPattern = new RegExp(`\\b${rootVar}\\.(\\w+)`, 'g');
+            let storeMatch = storeAccessPattern.exec(cleanKey);
+            if (storeMatch !== null) {
+              if (!usedStoreKeys.has(store)) {
+                usedStoreKeys.set(store, new Set());
+              }
+              usedStoreKeys.get(store)!.add(storeMatch[1]);
+              bindings.push({node: node as HTMLElement, template: text, dependencies: [storeMatch[1]]});
+            }
+          } else if (rootVar in stateProxy && !(rootVar in loopContext)) {
+            bindings.push({node: node as HTMLElement, template: text, dependencies: [key]});
+          }
+
+          const value = evaluateExpression(key, loopContext);
+          result = result.replace(match, String(value ?? ''));
+          (node as Text).data = result;
+        }
+      }
+
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+
+        if (el.hasAttribute('if') || el.hasAttribute('for')) return;
+
+        if (el.hasAttribute("show")) {
+          const expression = el.getAttribute('show')!.trim();
+          conditionalVisibilty.push({
+            node: el,
+            expression,
+            dependencies: extractDependencies(expression),
+            style: ''
+          });
+          el.removeAttribute("show");
+        }
+
+        if (el.hasAttribute("bind")) {
+          const key = el.getAttribute('bind')!.trim();
+          const val = stateProxy.getByPath(key);
+          if (el instanceof HTMLInputElement) {
+            if (el.type === 'checkbox') {
+              el.checked = !!val;
+            } else if (el.type === 'radio') {
+              el.checked = el.value === val;
+            } else {
+              el.value = val ?? '';
+            }
+          } else if (el instanceof HTMLSelectElement) {
+            el.value = val ?? '';
+          } else if (el instanceof HTMLTextAreaElement) {
+            el.value = val ?? '';
+          }
+          
+          const updateState = (e: Event) => {
+            const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+            if (target instanceof HTMLInputElement) {
+              if (target.type === 'checkbox') {
+                stateProxy.setByPath(key, target.checked);
+              } else if (target.type === 'radio') {
+                stateProxy.setByPath(key, target.checked ? target.value : '');
+              } else {
+                stateProxy.setByPath(key, target.value);
+              }
+            } else {
+              stateProxy.setByPath(key, target.value);
+            }
+          };
+          
+          el.addEventListener('input', updateState);
+          el.addEventListener('change', updateState);
+          
+          const dependencies = extractDependencies(key);
+          bindings.push({node: el, template: `{${key}}`, dependencies });
+        }
+        el.removeAttribute("bind");
+
+        const childTag = el.tagName.toLowerCase();
+        if (components[childTag] && childTag !== tag) {
+          return;
+        }
+
+        el.getAttributeNames().forEach(attr => {
+          if (attr.startsWith("on:")) {
+            const eventName = attr.slice(3);
+            const expr = el.getAttribute(attr)?.trim();
+            if (expr) {
+              el.addEventListener(eventName, (e: Event) => {
+                const ctx = {...stateProxy, ...loopContext, ...window, event: e};
+                try {
+                  const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
+                  fn.call(stateProxy, ...Object.values(ctx));
+                } catch (err) {
+                  console.error(`Error evaluating event "${expr}":`, err);
+                }
+              });
+            }
+            el.removeAttribute(attr);
+          } else {
+            const expr = el.getAttribute(attr);
+            if (expr) {
+              const result = evaluateExpression(expr);
+              if (result !== undefined) {
+                const dependencies = extractDependencies(expr);
+                if (dependencies.length > 0) {
+                  attributeBindings.push({
+                    element: el,
+                    attribute: attr,
+                    expression: expr,
+                    dependencies
+                  });
+                  el.setAttribute(attr, result);
+                }
+              }
+            }
+          }
+        });
+
+        for (const child of Array.from(node.childNodes)) {
+          walkSync(child, loopContext);
+        }
+      }
     }
 
     function updateVisibility(changedKey: string) {
@@ -555,16 +792,17 @@ export function component<S>(
 
         if (el instanceof HTMLInputElement) {
           if (el.type === "checkbox") {
-            el.checked = !!evaluateExpression(binding.dependencies[0]); // boolean
+            const expr = binding.template.match(/\{(.*?)\}/)?.[1]?.trim() || binding.dependencies[0];
+            el.checked = !!evaluateExpression(expr);
           } else if (el.type === "radio") {
-            el.checked = el.value === evaluateExpression(binding.dependencies[0]);
+            const expr = binding.template.match(/\{(.*?)\}/)?.[1]?.trim() || binding.dependencies[0];
+            el.checked = el.value === evaluateExpression(expr);
           } else {
-            el.value = result;
+            el.value = result.replace(/^\{|\}$/g, '');
           }
         } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
-          el.value = result;
+          el.value = result.replace(/^\{|\}$/g, '');
         } else if ("data" in el) {
-          // for text nodes
           (el as any).data = result;
         }
       });
@@ -576,7 +814,7 @@ export function component<S>(
       updateLoops(key);
       updateVisibility(key);
       updateAttributes(key);
-    };
+    }
 
     function update() {
       for (const key of Object.keys(stateProxy)) {
