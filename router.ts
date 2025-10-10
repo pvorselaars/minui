@@ -1,4 +1,5 @@
 let currentComponent: any = null;
+let renderPromise: Promise<void> | null = null;
 
 export async function router(target: HTMLElement, routes: Record<string, (inputs?: any, routeParams?: any) => any>) {
 
@@ -29,10 +30,12 @@ export async function router(target: HTMLElement, routes: Record<string, (inputs
   }
 
   window.addEventListener("popstate", async () => {
-    await render(window.location.pathname + window.location.search);
+    renderPromise = render(window.location.pathname + window.location.search);
+    await renderPromise;
   });
 
-  await render(window.location.pathname + window.location.search);
+  renderPromise = render(window.location.pathname + window.location.search);
+  await renderPromise;
 }
 
 export async function go(path: string) {
@@ -40,5 +43,7 @@ export async function go(path: string) {
   const event = new Event("popstate", { bubbles: true });
   window.dispatchEvent(event);
 
-  await Promise.resolve();
+  if (renderPromise) {
+    await renderPromise;
+  }
 }

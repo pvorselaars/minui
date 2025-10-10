@@ -19,10 +19,25 @@ beforeEach(() => {
 });
 
 describe("component()", () => {
+  const factory = component(
+    "hello-world",
+    `Hello {name}!`,
+    () => ({ name: "Bun" })
+  );
+
   test("should register and render a basic component", async () => {
+
+    const { mount } = await factory();
+    mount(document.body);
+
+    const html = document.body.innerHTML;
+    expect(html).toBe("<hello-world>Hello Bun!</hello-world>");
+  });
+
+  test("should render subcomponents", async () => {
     const factory = component(
-      "hello-world",
-      `<div>Hello {name}!</div>`,
+      "hello-subcomponent",
+      `<hello-world></hello-world><hello-world></hello-world>`,
       () => ({ name: "Bun" })
     );
 
@@ -30,7 +45,7 @@ describe("component()", () => {
     mount(document.body);
 
     const html = document.body.innerHTML;
-    expect(html).toContain("Hello Bun!");
+    expect(html).toBe("<hello-subcomponent><hello-world>Hello Bun!</hello-world><hello-world>Hello Bun!</hello-world></hello-subcomponent>");
   });
 
   test("should bind state and update DOM on change", async () => {
@@ -352,6 +367,28 @@ describe("bind", () => {
 
         expect(state.message).toBe("User typed");
     });
+
+    test("deep binding works", async () => {
+        const factory = component(
+        "bind-deep",
+        `<input type=text bind=obj.prop.prop />`,
+        () => ({ obj: { prop: { prop: "value" }} })
+        );
+
+        const { root, mount, state } = await factory();
+        mount(document.body);
+
+        const input = root.querySelector("input")!;
+        expect(input.value).toBe("value");
+
+        input.value = "new value"
+        const event = new Event("input", { bubbles: true });
+        Object.defineProperty(event, 'target', { value: input, writable: false });
+        input.dispatchEvent(event);
+
+        expect(state.obj.prop.prop).toBe("new value");
+    });
+
 });
 
 describe("attribute binding", () => {
