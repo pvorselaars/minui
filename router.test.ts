@@ -15,17 +15,17 @@ const window = new Window({ url: 'http://localhost' });
 (globalThis as any).window = window;
 (globalThis as any).history = window.history;
 
-describe("router", async () => {
+describe("router", () => {
     let target = document.body;
     const Home = component("home", "Home", () => ({}));
     const About = component("about", "About", () => ({}));
     const Page = component("page", "{id}", () => ({}));
     const routes = { "/": Home, "/about": About, "/page": Page };
 
-    await router(target, routes);
+    router(target, routes);
 
     beforeEach(async () => {
-        await go('/');
+        go('/');
     });
 
     test("renders default route", async () => {
@@ -33,17 +33,17 @@ describe("router", async () => {
     });
 
     test("go() updates current component", async () => {
-        await go("/about");
+        go("/about");
         expect(target.innerHTML).toBe('<about>About</about>');
     });
 
     test("renders correct route with params", async () => {
-        await go("/page?id=42");
+        go("/page?id=42");
         expect(target.innerHTML).toBe('<page>42</page>');
     });
 
     test("unknown route falls back to default", async () => {
-        await go("/notfound");
+        go("/notfound");
         expect(target.innerHTML).toBe('<home>Home</home>');
     });
 });

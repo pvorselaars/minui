@@ -1,7 +1,6 @@
 let currentComponent: any = null;
-let renderPromise: Promise<void> | null = null;
 
-export async function router(target: HTMLElement, routes: Record<string, (inputs?: any, routeParams?: any) => any>) {
+export function router(target: HTMLElement, routes: Record<string, (inputs?: any, routeParams?: any) => any>) {
 
    function parseUrl(url: string) {
     const [path, queryString] = url.split("?");
@@ -15,7 +14,7 @@ export async function router(target: HTMLElement, routes: Record<string, (inputs
     return { path, params };
   }
 
-  async function render(url: string) {
+  function render(url: string) {
     const { path, params } = parseUrl(url);
 
     if (currentComponent) {
@@ -24,26 +23,20 @@ export async function router(target: HTMLElement, routes: Record<string, (inputs
 
     const factory = routes[path] || routes["/"];
     if (factory) {
-      currentComponent = await factory(undefined, params);
+      currentComponent = factory(undefined, params);
       currentComponent.mount(target);
     }
   }
 
   window.addEventListener("popstate", async () => {
-    renderPromise = render(window.location.pathname + window.location.search);
-    await renderPromise;
+    render(window.location.pathname + window.location.search);
   });
 
-  renderPromise = render(window.location.pathname + window.location.search);
-  await renderPromise;
+  render(window.location.pathname + window.location.search);
 }
 
-export async function go(path: string) {
+export function go(path: string) {
   history.pushState({}, "", path);
   const event = new Event("popstate", { bubbles: true });
   window.dispatchEvent(event);
-
-  if (renderPromise) {
-    await renderPromise;
-  }
 }
