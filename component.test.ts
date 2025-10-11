@@ -27,7 +27,7 @@ describe("component()", () => {
 
   test("should register and render a basic component", async () => {
 
-    const { mount } = await factory();
+    const { mount } = factory();
     mount(document.body);
 
     const html = document.body.innerHTML;
@@ -41,7 +41,7 @@ describe("component()", () => {
       () => ({ name: "Bun" })
     );
 
-    const { mount } = await factory();
+    const { mount } = factory();
     mount(document.body);
 
     const html = document.body.innerHTML;
@@ -55,7 +55,7 @@ describe("component()", () => {
       () => ({ count: 0 })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     const btn = root.querySelector("button")!;
@@ -81,8 +81,8 @@ describe("component()", () => {
       `
     );
 
-    await factory();
-    await factory();
+    factory();
+    factory();
 
     const styleTags = document.head.querySelectorAll("style");
     expect(styleTags.length).toBe(1);
@@ -107,7 +107,7 @@ describe("component()", () => {
       () => ({ clicked })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     const btn = root.querySelector("button")!;
@@ -123,7 +123,7 @@ describe("component()", () => {
     (input?: { count: number }) => ({ count: input?.count ?? 0 })
     );
 
-    let { root, mount } = await factory({ count: 10 });
+    let { root, mount } = factory({ count: 10 });
     mount(document.body);
 
     const div = root.querySelector("div")!;
@@ -150,7 +150,7 @@ describe("component()", () => {
       })
     );
 
-    const { root, mount, state } = await parent();
+    const { root, mount, state } = parent();
     mount(document.body);
 
     const p = root.querySelector("child-comp p")!;
@@ -173,7 +173,7 @@ describe("for", () => {
     );
 
     test("should render initial array items", async () => {
-        const { root, mount } = await factory({ items: ["A", "B", "C"] });
+        const { root, mount } = factory({ items: ["A", "B", "C"] });
         mount(document.body);
 
         const lis = root.querySelectorAll("li");
@@ -184,7 +184,7 @@ describe("for", () => {
     });
 
     test("should update DOM when array changes", async () => {
-        const { root, mount, state } = await factory({ items: ["X", "Y"] });
+        const { root, mount, state } = factory({ items: ["X", "Y"] });
         mount(document.body);
 
         let lis = root.querySelectorAll("li");
@@ -208,7 +208,7 @@ describe("for", () => {
 
     /*
     test("should update text when array item changes", async () => {
-        const { root, mount, state } = await factory({ items: ["foo", "bar"] });
+        const { root, mount, state } = factory({ items: ["foo", "bar"] });
         mount(document.body);
 
         const lis = root.querySelectorAll("li");
@@ -230,7 +230,7 @@ describe("if", () => {
     );
 
     test("should render element when condition is true", async () => {
-        const { root, mount } = await factory();
+        const { root, mount } = factory();
         mount(document.body);
 
         const p = root.querySelector("p");
@@ -239,7 +239,7 @@ describe("if", () => {
     });
 
     test("should not render element when condition is false", async () => {
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         let p = root.querySelector("p");
@@ -265,7 +265,7 @@ describe("show", () => {
     );
 
     test("should show element when condition is true", async () => {
-        const { root, mount } = await factory();
+        const { root, mount } = factory();
         mount(document.body);
 
         const div = root.querySelector("div")!;
@@ -273,7 +273,7 @@ describe("show", () => {
     });
 
     test("should hide element when condition is false", async () => {
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const div = root.querySelector("div")!;
@@ -296,7 +296,7 @@ describe("bind", () => {
     );
 
     test("state updates input value", async () => {
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const input = root.querySelector("input")!;
@@ -307,7 +307,7 @@ describe("bind", () => {
     });
 
     test("input updates state", async () => {
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const input = root.querySelector("input")!;
@@ -329,7 +329,7 @@ describe("bind", () => {
         () => ({ checked: true })
         );
 
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const checkbox = root.querySelector("input")!;
@@ -356,7 +356,7 @@ describe("bind", () => {
         () => ({ color: "blue" })
         );
 
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const select = root.querySelector("select")!;
@@ -381,7 +381,7 @@ describe("bind", () => {
         () => ({ message: "Hello World" })
         );
 
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const textarea = root.querySelector("textarea")!;
@@ -406,7 +406,7 @@ describe("bind", () => {
         () => ({ obj: { prop: { prop: "value" }} })
         );
 
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const input = root.querySelector("input")!;
@@ -431,7 +431,7 @@ describe("attribute binding", () => {
     );
 
     test("should evaluate expression for attribute", async () => {
-        const { root, mount } = await factory();
+        const { root, mount } = factory();
         mount(document.body);
 
         const btn = root.querySelector("button")!;
@@ -439,7 +439,7 @@ describe("attribute binding", () => {
     });
 
     test("state change should update attribute", async () => {
-        const { root, mount, state } = await factory();
+        const { root, mount, state } = factory();
         mount(document.body);
 
         const btn = root.querySelector("button")!;
@@ -467,7 +467,7 @@ describe("subcomponent array propagation", () => {
       () => ({ myItems: ["A", "B", "C"] })
     );
 
-    const { mount } = await parentFactory();
+    const { mount } = parentFactory();
     mount(document.body);
 
     const lis = document.querySelectorAll("li");
@@ -490,7 +490,7 @@ describe("subcomponent array propagation", () => {
       () => ({ data: ["X", "Y"] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -519,7 +519,7 @@ describe("subcomponent array propagation", () => {
       () => ({ data: ["A", "B", "C"] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -547,7 +547,7 @@ describe("subcomponent array propagation", () => {
       () => ({ data: ["First", "Second", "Third"] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -576,7 +576,7 @@ describe("subcomponent array propagation", () => {
       () => ({ data: ["Old1", "Old2"] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -613,7 +613,7 @@ describe("subcomponent array propagation", () => {
       })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -650,7 +650,7 @@ describe("subcomponent array propagation", () => {
       })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -696,7 +696,7 @@ describe("subcomponent array propagation", () => {
       () => ({ myItems: ["One", "Two"] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -725,7 +725,7 @@ describe("subcomponent array propagation", () => {
       () => ({ data: [] as string[] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -754,7 +754,7 @@ describe("subcomponent array propagation", () => {
       () => ({ data: ["A", "B", "C", "D"] })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -793,7 +793,7 @@ describe("subcomponent array propagation", () => {
       })
     );
 
-    const { mount, state } = await parentFactory();
+    const { mount, state } = parentFactory();
     mount(document.body);
 
     const h3 = document.querySelector("h3");
@@ -829,7 +829,7 @@ describe("subcomponent array propagation", () => {
       })
     );
 
-    const { mount, state } = await parentFactory({ items: ["A", "B"] });
+    const { mount, state } = parentFactory({ items: ["A", "B"] });
     mount(document.body);
 
     let lis = document.querySelectorAll("li");
@@ -860,7 +860,7 @@ describe("computed properties", () => {
       })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     const div = root.querySelector("div")!;
@@ -888,7 +888,7 @@ describe("computed properties", () => {
       })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     let lis = root.querySelectorAll("li");
@@ -917,7 +917,7 @@ describe("computed properties", () => {
       })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     const div = root.querySelector("div")!;
@@ -939,7 +939,7 @@ describe('attribute bindings with loopContext', () => {
       () => ({ items: [{ id: 0 }, { id: 1 }], id: 0 })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     const divs = root.querySelectorAll('div');
@@ -958,7 +958,7 @@ describe('attribute bindings with loopContext', () => {
       () => ({ active: false })
     );
 
-    const { root, mount, state } = await factory();
+    const { root, mount, state } = factory();
     mount(document.body);
 
     const div = root.querySelector('div')!;

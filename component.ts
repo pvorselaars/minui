@@ -33,13 +33,7 @@ export function component<S>(
 
   registerStyle(tag, style);
 
-  type ResolvedState = S extends Promise<infer U> ? U : S;
-  type StateEmitter = ResolvedState & { 
-    emit: (eventName: string, detail?: any) => void
-    [key: string]: any;
-  }
-
-  const factory = async function (input?: any, routeParams?: any) {
+  const factory = function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
     root.innerHTML = template.trim();
 
@@ -82,7 +76,6 @@ export function component<S>(
       context: Record<string, any>;
     }> = [];
 
-    // Track child components and their bound inputs
     const childComponents: Array<{
       instance: any;
       bindings: Array<{
@@ -92,7 +85,7 @@ export function component<S>(
       }>;
     }> = [];
 
-    const resolvedState = state(input) as ResolvedState;
+    const resolvedState = state(input);
 
     const fullState = Object.create(
       Object.getPrototypeOf(resolvedState || {}),
@@ -103,8 +96,6 @@ export function component<S>(
       }
     );
 
-
-    // Track computed properties (getters)
     const computedProperties = new Map<string, {
       getter: () => any;
       dependencies: Set<string>;
@@ -134,33 +125,28 @@ export function component<S>(
         return obj;
       }
 
-      // Check if object is already a proxy by checking for our custom marker
-      if (obj.__isMinuiProxy) {
+      if (obj.__proxy) {
         return obj;
       }
 
-      // Special handling for arrays to intercept mutating methods
       if (Array.isArray(obj)) {
         const arrayProxy = new Proxy(obj, {
           get(target: any, key: string | symbol): any {
-            if (key === '__isMinuiProxy') {
+            if (key === '__proxy') {
               return true;
             }
 
-            // Track property access for computed dependencies
-            if (currentlyTracking && typeof key === 'string' && key !== 'emit' && key !== '__isMinuiProxy') {
+            if (currentlyTracking && typeof key === 'string' && key !== 'emit' && key !== '__proxy') {
               const rootKey = path.length > 0 ? path[0] : key.toString();
               currentlyTracking.add(rootKey);
             }
 
             const value = target[key];
 
-            // Intercept array mutating methods
             if (typeof value === 'function' && ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse'].includes(key as string)) {
               return function(this: any, ...args: any[]) {
                 const result = value.apply(this, args);
                 
-                // Trigger update for the root array
                 const rootKey = path.length > 0 ? path[0] : 'length';
                 updateKey(rootKey);
                 
@@ -174,7 +160,7 @@ export function component<S>(
             return value;
           },
           set(target: any, key: string | symbol, value: any): boolean {
-            const isAlreadyProxy = value && typeof value === 'object' && value.__isMinuiProxy;
+            const isAlreadyProxy = value && typeof value === 'object' && value.__proxy;
             
             if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof RegExp) && !isAlreadyProxy) {
               target[key] = value;
@@ -224,14 +210,12 @@ export function component<S>(
 
       const proxy = new Proxy(obj, {
         get(target: any, key: string | symbol): any {
-          // Return marker for proxy detection
-          if (key === '__isMinuiProxy') {
+          if (key === '__proxy') {
             return true;
           }
           
           // Track property access for computed dependencies
-          if (currentlyTracking && typeof key === 'string' && key !== 'emit' && key !== '__isMinuiProxy') {
-            // Track the root property (first level)
+          if (currentlyTracking && typeof key === 'string' && key !== 'emit' && key !== '__proxy') {
             const rootKey = path.length > 0 ? path[0] : key.toString();
             currentlyTracking.add(rootKey);
           }
@@ -243,8 +227,7 @@ export function component<S>(
           return value;
         },
         set(target: any, key: string | symbol, value: any): boolean {
-          // Don't re-proxy values that are already proxies
-          const isAlreadyProxy = value && typeof value === 'object' && value.__isMinuiProxy;
+          const isAlreadyProxy = value && typeof value === 'object' && value.__isMinuiProx;
           
           if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof RegExp) && !isAlreadyProxy) {
             target[key] = value;
@@ -306,30 +289,24 @@ export function component<S>(
 
     const stateProxy = createDeepProxy(fullState, []);
 
-    // Track which properties are being accessed during computed evaluation
     let currentlyTracking: Set<string> | null = null;
 
-    // Replace computed properties with tracked getters
     computedProperties.forEach((computed, key) => {
-      // Initialize dependencies by evaluating once
       currentlyTracking = new Set();
       try {
         computed.getter.call(stateProxy);
       } catch (e) {
-        // Ignore errors during initial dependency tracking
       }
       computed.dependencies = currentlyTracking;
       currentlyTracking = null;
 
       Object.defineProperty(stateProxy, key, {
         get() {
-          // Re-track dependencies on each access to update dependency graph
           const previousTracking = currentlyTracking;
           currentlyTracking = new Set();
           
           const result = computed.getter.call(stateProxy);
           
-          // Update dependencies if they've changed
           computed.dependencies = currentlyTracking;
           currentlyTracking = previousTracking;
           
@@ -392,7 +369,6 @@ export function component<S>(
 
       const cleanExpr = expr.replace(/\?\./g, '.');
 
-      // Check state properties
       for (const key of stateKeys) {
         const regex = new RegExp(`\\b${key}(?:\\.(\\w+(?:\\.\\w+)*))?\\b`, 'g');
         let match;
@@ -406,7 +382,6 @@ export function component<S>(
         }
       }
 
-      // Check loop variables
       for (const key of loopKeys) {
         const regex = new RegExp(`\\b${key}(?:\\.(\\w+(?:\\.\\w+)*))?\\b`, 'g');
         let match;
@@ -423,7 +398,7 @@ export function component<S>(
       return Array.from(deps);
     }
 
-    async function walk(node: Node, loopContext: Record<string, any> = {}) {
+    function walk(node: Node, loopContext: Record<string, any> = {}) {
       if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent || '';
         const matches = text.match(/\{(.*?)\}/g);
@@ -447,7 +422,6 @@ export function component<S>(
               bindings.push({node: node as HTMLElement, template: text, dependencies: [match[1]]});
             }
           } else if (rootVar in stateProxy && !(rootVar in loopContext)) {
-            // Check if this is a computed property
             const deps = computedProperties.has(rootVar) ? [rootVar] : [key];
             bindings.push({node: node as HTMLElement, template: text, dependencies: deps});
           }
@@ -486,7 +460,7 @@ export function component<S>(
           if (shouldRender) {
             const rendered = templateClone.cloneNode(true) as Element;
             placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
-            await walk(rendered, loopContext);
+            walk(rendered, loopContext);
           }
           
           return;
@@ -520,7 +494,7 @@ export function component<S>(
             loops.push(loopData);
             el.remove();
             
-            await renderLoop(loopData, loopContext);
+            renderLoop(loopData, loopContext);
             return;
           }
         }
@@ -610,7 +584,6 @@ export function component<S>(
               const resolvedValue = evaluateExpression(key, loopContext);
               childInputs[attr] = resolvedValue;
               
-              // Track this binding for updates
               const dependencies = extractDependencies(key);
               inputBindings.push({
                 inputKey: attr,
@@ -626,7 +599,7 @@ export function component<S>(
             }
           });
 
-          const c = await components[childTag](childInputs);
+          const c = components[childTag](childInputs);
           const childRoots = toNodeArray(c.root);
 
           eventListeners.forEach(({event, handler}) => {
@@ -698,12 +671,12 @@ export function component<S>(
         });
 
         for (const child of Array.from(node.childNodes)) {
-          await walk(child, loopContext);
+          walk(child, loopContext);
         }
       }
     }
 
-    async function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
+    function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
       const nodesToRemove = new Set(loopData.renderedNodes);
       
       for (let i = conditionals.length - 1; i >= 0; i--) {
@@ -740,7 +713,7 @@ export function component<S>(
         const context = { ...parentContext, [loopData.itemVar]: item };
         if (loopData.indexVar) context[loopData.indexVar] = index;
         const rendered = loopData.template.cloneNode(true) as Element;
-        await walk(rendered, context);
+        walk(rendered, context);
         fragment.appendChild(rendered);
         loopData.renderedNodes.push(rendered);
       }
@@ -748,7 +721,7 @@ export function component<S>(
       loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
     }
 
-    await walk(root);
+    walk(root);
 
     function updateConditionals(changedKey: string) {
       conditionals.forEach(cond => {
@@ -761,7 +734,7 @@ export function component<S>(
         if (shouldRender && !currentlyRendered) {
           const rendered = cond.template.cloneNode(true) as Element;
           cond.placeholder.parentNode?.insertBefore(rendered, cond.placeholder.nextSibling);
-          walkSync(rendered, cond.context);
+          walk(rendered, cond.context);
         } else if (!shouldRender && currentlyRendered) {
           cond.placeholder.nextSibling?.remove();
         }
@@ -771,7 +744,7 @@ export function component<S>(
     function updateLoops(changedKey: string) {
       loops.forEach(loopData => {
         if (!loopData.dependencies.includes(changedKey)) return;
-        renderLoopSync(loopData);
+        renderLoop(loopData);
       });
     }
 
@@ -780,199 +753,13 @@ export function component<S>(
         child.bindings.forEach(binding => {
           if (!binding.dependencies.includes(changedKey)) return;
           
-          // Get the new value from parent state
           const newValue = evaluateExpression(binding.stateKey);
           
-          // Update child component's state
           if (child.instance.state) {
             child.instance.state[binding.inputKey] = newValue;
           }
         });
       });
-    }
-
-    function renderLoopSync(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
-      const nodesToRemove = new Set(loopData.renderedNodes);
-      
-      for (let i = conditionals.length - 1; i >= 0; i--) {
-        const placeholder = conditionals[i].placeholder;
-        for (const node of nodesToRemove) {
-          if (node.contains(placeholder)) {
-            conditionals.splice(i, 1);
-            break;
-          }
-        }
-      }
-      
-      for (let i = loops.length - 1; i >= 0; i--) {
-        if (loops[i] === loopData) continue;
-        const placeholder = loops[i].placeholder;
-        for (const node of nodesToRemove) {
-          if (node.contains(placeholder)) {
-            loops.splice(i, 1);
-            break;
-          }
-        }
-      }
-      
-      loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
-      loopData.renderedNodes = [];
-
-      const array = evaluateExpression(loopData.arrayExpr, parentContext);
-      if (!Array.isArray(array)) return;
-
-      const fragment = document.createDocumentFragment();
-
-      for (let index = 0; index < array.length; index++) {
-        const item = array[index];
-        const context = { ...parentContext, [loopData.itemVar]: item };
-        if (loopData.indexVar) context[loopData.indexVar] = index;
-        const rendered = loopData.template.cloneNode(true) as Element;
-        walkSync(rendered, context);
-        fragment.appendChild(rendered);
-        loopData.renderedNodes.push(rendered);
-      }
-
-      loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
-    }
-
-    function walkSync(node: Node, loopContext: Record<string, any> = {}) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent || '';
-        const matches = text.match(/\{(.*?)\}/g);
-        if (!matches) return;
-
-        let result = text;
-        for (const match of matches) {
-          const key = match.slice(1, -1).trim();
-          const cleanKey = key.replace(/\?\./g, '.');
-          const rootVar = cleanKey.split(/[.\[\(]/)[0];
-
-          const store = stateStores.get(rootVar);
-          if (store) {
-            const storeAccessPattern = new RegExp(`\\b${rootVar}\\.(\\w+)`, 'g');
-            let storeMatch = storeAccessPattern.exec(cleanKey);
-            if (storeMatch !== null) {
-              if (!usedStoreKeys.has(store)) {
-                usedStoreKeys.set(store, new Set());
-              }
-              usedStoreKeys.get(store)!.add(storeMatch[1]);
-              bindings.push({node: node as HTMLElement, template: text, dependencies: [storeMatch[1]]});
-            }
-          } else if (rootVar in stateProxy && !(rootVar in loopContext)) {
-            // Check if this is a computed property
-            const deps = computedProperties.has(rootVar) ? [rootVar] : [key];
-            bindings.push({node: node as HTMLElement, template: text, dependencies: deps});
-          }
-
-          const value = evaluateExpression(key, loopContext);
-          result = result.replace(match, String(value ?? ''));
-          (node as Text).data = result;
-        }
-      }
-
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-
-        if (el.hasAttribute('if') || el.hasAttribute('for')) return;
-
-        if (el.hasAttribute("show")) {
-          const expression = el.getAttribute('show')!.trim();
-          conditionalVisibilty.push({
-            node: el,
-            expression,
-            dependencies: extractDependencies(expression),
-            style: ''
-          });
-          el.removeAttribute("show");
-        }
-
-        if (el.hasAttribute("bind")) {
-          const key = el.getAttribute('bind')!.trim();
-          const val = stateProxy.getByPath(key);
-          if (el instanceof HTMLInputElement) {
-            if (el.type === 'checkbox') {
-              el.checked = !!val;
-            } else if (el.type === 'radio') {
-              el.checked = el.value === val;
-            } else {
-              el.value = val ?? '';
-            }
-          } else if (el instanceof HTMLSelectElement) {
-            el.value = val ?? '';
-          } else if (el instanceof HTMLTextAreaElement) {
-            el.value = val ?? '';
-          }
-          
-          const updateState = (e: Event) => {
-            const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-            if (target instanceof HTMLInputElement) {
-              if (target.type === 'checkbox') {
-                stateProxy.setByPath(key, target.checked);
-              } else if (target.type === 'radio') {
-                stateProxy.setByPath(key, target.checked ? target.value : '');
-              } else {
-                stateProxy.setByPath(key, target.value);
-              }
-            } else {
-              stateProxy.setByPath(key, target.value);
-            }
-          };
-          
-          el.addEventListener('input', updateState);
-          el.addEventListener('change', updateState);
-          
-          const dependencies = extractDependencies(key);
-          bindings.push({node: el, template: `{${key}}`, dependencies });
-        }
-        el.removeAttribute("bind");
-
-        const childTag = el.tagName.toLowerCase();
-        if (components[childTag] && childTag !== tag) {
-          return;
-        }
-
-        el.getAttributeNames().forEach(attr => {
-          if (attr.startsWith("on:")) {
-            const eventName = attr.slice(3);
-            const expr = el.getAttribute(attr)?.trim();
-            if (expr) {
-              el.addEventListener(eventName, (e: Event) => {
-                const ctx = {...stateProxy, ...loopContext, ...window, event: e};
-                try {
-                  const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
-                  fn.call(stateProxy, ...Object.values(ctx));
-                } catch (err) {
-                  console.error(`Error evaluating event "${expr}":`, err);
-                }
-              });
-            }
-            el.removeAttribute(attr);
-          } else {
-            const expr = el.getAttribute(attr);
-            if (expr) {
-              const result = evaluateExpression(expr, loopContext);
-              if (result !== undefined) {
-                const dependencies = extractDependencies(expr, loopContext);
-                if (dependencies.length > 0) {
-                  attributeBindings.push({
-                    element: el,
-                    attribute: attr,
-                    expression: expr,
-                    dependencies,
-                    context: loopContext
-                  });
-                }
-                el.setAttribute(attr, result);
-              }
-            }
-          }
-        });
-
-        for (const child of Array.from(node.childNodes)) {
-          walkSync(child, loopContext);
-        }
-      }
     }
 
     function updateVisibility(changedKey: string) {
@@ -1047,13 +834,10 @@ export function component<S>(
       updateAttributes(key);
       updateChildComponents(key);
       
-      // Check if any computed properties depend on this key
       computedProperties.forEach((computed, computedKey) => {
-        // Extract root key from potentially nested key (e.g., "items.length" -> "items")
         const rootKey = key.split('.')[0];
         
         if (computed.dependencies.has(rootKey) || computed.dependencies.has(key)) {
-          // Update anything that depends on this computed property
           updateKey(computedKey);
         }
       });
