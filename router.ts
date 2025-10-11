@@ -14,7 +14,7 @@ export function router(target: HTMLElement, routes: Record<string, (inputs?: any
     return { path, params };
   }
 
-  async function render(url: string) {
+  function render(url: string) {
     const { path, params } = parseUrl(url);
 
     if (currentComponent) {
@@ -35,7 +35,7 @@ export function router(target: HTMLElement, routes: Record<string, (inputs?: any
   render(window.location.pathname + window.location.search);
 }
 
-export async function go(path: string) {
+export function go(path: string) {
   history.pushState({}, "", path);
   const event = new Event("popstate", { bubbles: true });
   window.dispatchEvent(event);
