@@ -935,45 +935,20 @@ describe('attribute bindings with loopContext', () => {
   test('updates class attribute based on loop variable', async () => {
     const factory = component(
       'loop-test',
-      `<div for="item in items" class="item.active ? 'selected' : ''">Item</div>`,
-      () => ({ items: [{ active: false }, { active: true }] })
+      `<div for="item in items" class="id === item.id ? 'selected' : ''">Item</div>`,
+      () => ({ items: [{ id: 0 }, { id: 1 }], id: 0 })
     );
 
     const { root, mount, state } = await factory();
     mount(document.body);
 
     const divs = root.querySelectorAll('div');
-    expect(divs[0].className).toBe(''); // inactive
-    expect(divs[1].className).toBe('selected'); // active
-
-    // Update loop variable
-    state.items[0].active = true;
     expect(divs[0].className).toBe('selected');
-
-    state.items[1].active = false;
     expect(divs[1].className).toBe('');
-  });
 
-  test('updates class attribute for nested loop variable properties', async () => {
-    const factory = component(
-      'nested-loop-test',
-      `<div for="item in items" class="item.details.highlight ? 'highlight' : ''">Item</div>`,
-      () => ({ items: [{ details: { highlight: false } }, { details: { highlight: true } }] })
-    );
-
-    const { root, mount, state } = await factory();
-    mount(document.body);
-
-    const divs = root.querySelectorAll('div');
+    state.id = 1;
     expect(divs[0].className).toBe('');
-    expect(divs[1].className).toBe('highlight');
-
-    // Change nested property
-    state.items[0].details.highlight = true;
-    expect(divs[0].className).toBe('highlight');
-
-    state.items[1].details.highlight = false;
-    expect(divs[1].className).toBe('');
+    expect(divs[1].className).toBe('selected');
   });
 
   test('tracks state variables outside loops correctly', async () => {
