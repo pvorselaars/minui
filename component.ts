@@ -105,31 +105,19 @@ export function component<S>(
       deps: Set<string>;
     }> = [];
 
-  // depMap maps a dependency key (root state key) to an array of binding ids that depend on it.
-  // Using numeric ids and a registry reduces Set allocations and can be iterated quickly.
-  const depMap: Map<string, number[]> = new Map();
-  const bindingRegistry: Map<number, { update: () => void; deps: Set<string> }> = new Map();
-  let bindingIdCounter = 0;
+    // depMap maps a dependency key (root state key) to an array of binding ids that depend on it.
+    // Using numeric ids and a registry reduces Set allocations and can be iterated quickly.
+    const depMap: Map<string, number[]> = new Map();
+    const bindingRegistry: Map<number, { update: () => void; deps: Set<string> }> = new Map();
+    let bindingIdCounter = 0;
 
     // pendingOldValues stores the previous value for a root key during a batch so optimized handlers
     // can know what changed (used by optimized index handlers).
     const pendingOldValues: Map<string, any> = new Map();
-  // pendingArrayOps stores recent array mutator operations (push/pop/shift/unshift/splice)
-  // keyed by root state key so `for` can perform incremental updates instead of full re-renders.
-  const pendingArrayOps: Map<string, { op: string; args: any[] }> = new Map();
 
-    // Optimized index-based updates: for cases like `class="{i === selected ? 'selected' : ''}"`
-    // we register each item element under the root key (selected) so when that key changes
-    // we only update the previous and new selected elements instead of all items.
-    const optimizedIndexMap: Map<string, {
-      trueVal: any;
-      falseVal: any;
-      isBoolean: boolean;
-      nodes: Map<number, HTMLElement>;
-      attr: string;
-    }> = new Map();
-    // Map from stateKey -> set of regKeys (regKey format: `${stateKey}::${attr}`)
-    const optimizedIndexByState: Map<string, Set<string>> = new Map();
+    // pendingArrayOps stores recent array mutator operations (push/pop/shift/unshift/splice)
+    // keyed by root state key so `for` can perform incremental updates instead of full re-renders.
+    const pendingArrayOps: Map<string, { op: string; args: any[] }> = new Map();
 
     // Cleanup functions for memory leak prevention
     const cleanups: Array<() => void> = [];
@@ -309,51 +297,16 @@ export function component<S>(
       pendingKeys.clear();
       updateScheduled = false;
 
-  // Process all pending updates using depMap for O(sum(deps touched)) instead of O(keys * allBindings)
-  const updatedBindings = new Set<number>();
+      // Process all pending updates using depMap for O(sum(deps touched)) instead of O(keys * allBindings)
+      const updatedBindings = new Set<number>();
 
-  const flushStart = __minui_profiler__.enabled ? Date.now() : 0;
+      const flushStart = __minui_profiler__.enabled ? Date.now() : 0;
 
       for (const k of keys) {
         if (__minui_profiler__.enabled) {
           __minui_profiler__.depMapSamples.push(depMap.get(k)?.length ?? 0);
         }
-  // First, handle optimized index-based updates for this key (if any)
-        const regKeys = optimizedIndexByState.get(k);
-        if (regKeys) {
-          const oldVal = pendingOldValues.has(k) ? pendingOldValues.get(k) : undefined;
-          const newVal = (stateProxy as any)[k];
-
-          for (const regKey of Array.from(regKeys)) {
-            const reg = optimizedIndexMap.get(regKey);
-            if (!reg) continue;
-
-            const oldIndex = oldVal != null ? Number(oldVal) : null;
-            const newIndex = newVal != null ? Number(newVal) : null;
-
-            if (oldIndex !== null && reg.nodes.has(oldIndex)) {
-              const el = reg.nodes.get(oldIndex)!;
-              if (reg.attr === 'class' && !reg.isBoolean) {
-                el.className = String(reg.falseVal ?? '');
-              } else if (reg.isBoolean) {
-                el.toggleAttribute(reg.attr, !!reg.falseVal);
-              } else {
-                el.setAttribute(reg.attr, String(reg.falseVal ?? ''));
-              }
-            }
-
-            if (newIndex !== null && reg.nodes.has(newIndex)) {
-              const el = reg.nodes.get(newIndex)!;
-              if (reg.attr === 'class' && !reg.isBoolean) {
-                el.className = String(reg.trueVal ?? '');
-              } else if (reg.isBoolean) {
-                el.toggleAttribute(reg.attr, !!reg.trueVal);
-              } else {
-                el.setAttribute(reg.attr, String(reg.trueVal ?? ''));
-              }
-            }
-          }
-        }
+        // (no optimized index updates)
 
         const set = depMap.get(k);
         if (set) {
@@ -394,8 +347,8 @@ export function component<S>(
       // Clear the pendingOldValues map after processing so future changes capture new old-values
       pendingOldValues.clear();
 
-  // Clear pending array ops map
-  pendingArrayOps.clear();
+      // Clear pending array ops map
+      pendingArrayOps.clear();
 
       if (__minui_profiler__.enabled) {
         const flushEnd = Date.now();
@@ -658,12 +611,6 @@ export function component<S>(
                 const last = rendered.pop();
                 if (last) {
                   const hn = last as any as HTMLElement;
-                  const regInfo = (hn as any).__minui_reg;
-                  if (regInfo) {
-                    const reg = optimizedIndexMap.get(regInfo.regKey);
-                    if (reg) reg.nodes.delete(regInfo.idx);
-                    delete (hn as any).__minui_reg;
-                  }
                   hn.remove();
                 }
                 return true;
@@ -677,12 +624,6 @@ export function component<S>(
               // Full re-render fallback
               for (const n of rendered) {
                 const hn = n as any as HTMLElement;
-                const regInfo = (hn as any).__minui_reg;
-                if (regInfo) {
-                  const reg = optimizedIndexMap.get(regInfo.regKey);
-                  if (reg) reg.nodes.delete(regInfo.idx);
-                  delete (hn as any).__minui_reg;
-                }
                 hn.remove();
               }
               rendered = [];
@@ -866,16 +807,6 @@ export function component<S>(
                   const fn = getParamStmtFn(keys, expr);
                   fn.call(stateProxy, ...values);
                   try { flushUpdates(); } catch {}
-                  try {
-                    const tEl = (e.currentTarget || e.target) as any as HTMLElement | null;
-                    if (tEl && (tEl as any).__minui_reg) {
-                      const regInfo = (tEl as any).__minui_reg as { regKey: string; idx: number };
-                      const reg = optimizedIndexMap.get(regInfo.regKey);
-                      if (reg && reg.attr === 'class' && !reg.isBoolean) {
-                        tEl.className = String(reg.trueVal ?? '');
-                      }
-                    }
-                  } catch {}
                 } catch (err) {
                   console.error(`Error in event handler:`, err);
                 }
@@ -962,26 +893,6 @@ export function component<S>(
                 // Run pending updates synchronously
                 try { flushUpdates(); } catch {}
 
-                // If the event target was one of the registered per-item nodes, ensure
-                // we set its class immediately so tests that captured the NodeList earlier
-                // observe the change even if a later re-render replaces nodes.
-                try {
-                  const tEl = (e.currentTarget || e.target) as any as HTMLElement | null;
-                  if (tEl) {
-                    const regInfo = (tEl as any).__minui_reg as { regKey: string; idx: number } | undefined;
-                    if (regInfo) {
-                      const reg = optimizedIndexMap.get(regInfo.regKey);
-                      if (reg && reg.attr === 'class' && !reg.isBoolean) {
-                        tEl.className = String(reg.trueVal ?? '');
-                        return; // done
-                      }
-                    }
-
-                    // Fallback: set 'selected' class directly on the clicked element so
-                    // tests that captured the NodeList earlier observe the change.
-                    tEl.className = 'selected';
-                  }
-                } catch {}
               } catch (err) {
                 console.error(`Error in event handler "${expr}":`, err);
                 console.error('Available scope:', Object.keys(fullScope));
@@ -1009,75 +920,8 @@ export function component<S>(
 
       // Aggregate all attribute expressions into a single binding to reduce number of binds
       if (attrExprs.length > 0) {
-        // Detect simple pattern: "i === stateKey ? trueVal : falseVal" to register optimized index updates.
-        // This is a heuristic: only register when we can parse `i === <key>` and there are literal true/false results.
-        for (const ae of attrExprs) {
-          const { attr, expr } = ae as any;
-          const match = expr.match(/^(\w+)\s*===?\s*(\w+)\s*\?\s*([^:]+)\s*:\s*(.+)$/);
-          if (match) {
-            const [, left, right, tExpr, fExpr] = match;
-            // left should be the loop index variable name (e.g., 'i') and right should be a state key
-            if (left && right) {
-              // Register this node in optimizedIndexMap under a regKey composed of stateKey + attr
-              const stateKey = right;
-              const regKey = `${stateKey}::${attr}`;
-              const isBoolean = booleanAttrs.has(attr);
-              let reg = optimizedIndexMap.get(regKey);
-              if (!reg) {
-                reg = { trueVal: undefined, falseVal: undefined, isBoolean, nodes: new Map(), attr };
-                optimizedIndexMap.set(regKey, reg);
-                let set = optimizedIndexByState.get(stateKey);
-                if (!set) {
-                  set = new Set();
-                  optimizedIndexByState.set(stateKey, set);
-                }
-                set.add(regKey);
-              }
-
-              // Try to parse literal true/false expressions (avoid direct eval so bundlers don't warn)
-              const parseLiteral = (src: string) => {
-                const s = src.trim();
-                // string literal
-                if ((s.startsWith("\'") && s.endsWith("\'")) || (s.startsWith('"') && s.endsWith('"'))) {
-                  return s.slice(1, -1).replace(/\\'/g, "'").replace(/\\\"/g, '"');
-                }
-                // numeric literal
-                if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s);
-                // boolean literal
-                if (s === 'true') return true;
-                if (s === 'false') return false;
-                return undefined;
-              };
-
-              try {
-                const tVal = parseLiteral(tExpr);
-                const fVal = parseLiteral(fExpr);
-                if (tVal !== undefined) reg.trueVal = tVal;
-                if (fVal !== undefined) reg.falseVal = fVal;
-              } catch {
-                // ignore non-literal branches
-              }
-
-              // If we have an index variable in context, try to register this node under that index
-              if (context && left in context) {
-                const idx = Number((context as any)[left]);
-                if (!Number.isNaN(idx)) {
-                  reg.nodes.set(idx, el);
-                }
-              }
-
-              // Mark this attribute expression as optimized so we skip creating the generic
-              // attribute binding for it (optimizedIndexMap will handle updates).
-              (ae as any).optimized = true;
-            }
-          }
-        }
-
-        // Bind only attribute expressions that weren't optimized into optimizedIndexMap
-        const nonOptimized = attrExprs.filter(a => !(a as any).optimized);
-        if (nonOptimized.length > 0) {
           bind(() => {
-            for (const { attr, expr } of nonOptimized) {
+            for (const { attr, expr } of attrExprs) {
               const result = evaluate(expr, context);
               if (result !== undefined) {
                 if (booleanAttrs.has(attr)) {
@@ -1089,7 +933,6 @@ export function component<S>(
             }
           }, context);
         }
-      }
 
       // Recurse into children
       Array.from(el.childNodes).forEach(child => walk(child, context));
