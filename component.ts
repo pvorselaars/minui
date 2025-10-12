@@ -41,7 +41,6 @@ const styles = new Set<string>();
 
 // Global caches for compiled expressions/statements to avoid recompilation.
 const __expr_cache__: Map<string, Function> = new Map();
-const __stmt_cache__: Map<string, Function> = new Map();
 const __param_stmt_cache__: Map<string, Function> = new Map();
 
 function getExprFn(expr: string) {
@@ -266,14 +265,9 @@ export function component<S>(
     // Helper: evaluate expression in scope
     function evaluate(expr: string, context: Record<string, any> = {}): any {
       try {
-        // Copy context into a plain object (only context keys will be enumerable)
         const ctx: Record<string, any> = context && typeof context === 'object' ? Object.assign({}, context) : {};
-        // Ensure emit is available as an own property on the context
         if (!('emit' in ctx) && (stateProxy as any).emit) ctx.emit = (stateProxy as any).emit;
 
-        // Create a proxy that forwards property access to ctx first, then to stateProxy.
-        // ownKeys and getOwnPropertyDescriptor only reflect ctx's own keys so spreading/iteration
-        // won't enumerate stateProxy keys and won't trigger proxy get traps for all keys.
         const scope = new Proxy(ctx, {
           has(target, prop) {
             return prop in target || prop in stateProxy;
@@ -850,16 +844,16 @@ export function component<S>(
 
           const value = el.getAttribute(attr)!;
           const bindMatch = value.match(/^\{(.*)\}$/);
-          
+
           if (bindMatch) {
             const expr = bindMatch[1].trim();
-            childInputs[attr] = evaluate(expr, context);
-            childBindings.push({ key: attr, expr });
-          } else {
-            try {
-              childInputs[attr] = JSON.parse(value);
-            } catch {
-              childInputs[attr] = value;
+              childInputs[attr] = evaluate(expr, context);
+              childBindings.push({ key: attr, expr });
+            } else {
+              try {
+                childInputs[attr] = JSON.parse(value);
+              } catch {
+                childInputs[attr] = value;
             }
           }
         });

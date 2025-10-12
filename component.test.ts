@@ -1490,3 +1490,71 @@ test('parent listens to child component events via on:custom attribute', async (
   await nextTick();
   expect(state.received).toEqual({ value: 7 });
 });
+
+test('should call state methods from event handlers (no stubbing)', async () => {
+  const factory = component(
+    'state-method-test',
+    `<button on:click="edit()">Edit</button>`,
+    () => ({ edited: false, edit() { (this as any).edited = true } })
+  );
+
+  const { root, mount, state } = factory();
+  mount(document.body);
+
+  const btn = root.querySelector('button')!;
+  btn.click();
+  await nextTick();
+
+  expect(state.edited).toBe(true);
+});
+
+test('if=!editing should show when editing is false and hide when true', async () => {
+  const factory = component(
+    'org-edit-test',
+    `<div if=!editing class=orginfo>View</div><div if=editing class=orgedit>Edit</div>`,
+    (input?: { editing?: boolean }) => ({ editing: input?.editing ?? false })
+  );
+
+  const { root, mount, state } = factory();
+  mount(document.body);
+
+  // Initially editing is false -> !editing is true -> View should be shown
+  expect(root.querySelector('.orginfo')).not.toBeNull();
+  expect(root.querySelector('.orgedit')).toBeNull();
+
+  // Toggle editing -> View should hide, Edit should show
+  state.editing = true;
+  await nextTick();
+  expect(root.querySelector('.orginfo')).toBeNull();
+  expect(root.querySelector('.orgedit')).not.toBeNull();
+});
+
+describe('undefined-handling in if', () => {
+  test('if="!object" should not render when object is undefined', async () => {
+    const factory = component(
+      'dash-undef',
+      `<dashboard if="!object">Dash</dashboard>`,
+      () => ({})
+    );
+
+    const { root, mount } = factory();
+    mount(document.body);
+
+    const dash = root.querySelector('dashboard');
+    expect(dash).toBeNull();
+  });
+
+  test('if="!object" should render when object exists but falsy', async () => {
+    const factory = component(
+      'dash-null',
+      `<dashboard if="!object">Dash</dashboard>`,
+      () => ({ object: null as any })
+    );
+
+    const { root, mount } = factory();
+    mount(document.body);
+
+    const dash = root.querySelector('dashboard');
+    expect(dash).not.toBeNull();
+  });
+});
