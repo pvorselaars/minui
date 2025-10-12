@@ -266,11 +266,32 @@ export function component<S>(
     // Helper: evaluate expression in scope
     function evaluate(expr: string, context: Record<string, any> = {}): any {
       try {
-        const scope = { ...stateProxy, ...context };
-        // Ensure emit is always available
-        if (!scope.emit && stateProxy.emit) {
-          scope.emit = stateProxy.emit;
-        }
+        // Copy context into a plain object (only context keys will be enumerable)
+        const ctx: Record<string, any> = context && typeof context === 'object' ? Object.assign({}, context) : {};
+        // Ensure emit is available as an own property on the context
+        if (!('emit' in ctx) && (stateProxy as any).emit) ctx.emit = (stateProxy as any).emit;
+
+        // Create a proxy that forwards property access to ctx first, then to stateProxy.
+        // ownKeys and getOwnPropertyDescriptor only reflect ctx's own keys so spreading/iteration
+        // won't enumerate stateProxy keys and won't trigger proxy get traps for all keys.
+        const scope = new Proxy(ctx, {
+          has(target, prop) {
+            return prop in target || prop in stateProxy;
+          },
+          get(target, prop, receiver) {
+            if (prop in target) return (target as any)[prop];
+            return (stateProxy as any)[prop as any];
+          },
+          ownKeys(target) {
+            return Reflect.ownKeys(target);
+          },
+          getOwnPropertyDescriptor(target, prop) {
+            const desc = Object.getOwnPropertyDescriptor(target, prop as any);
+            if (desc) return desc;
+            return undefined;
+          }
+        });
+
         const fn = getExprFn(expr);
         return fn(scope);
       } catch {
@@ -360,12 +381,14 @@ export function component<S>(
     // Create a reactive binding with cleanup
     function bind(updateFn: () => void, context: Record<string, any> = {}): () => void {
       if (__minui_profiler__.enabled) __minui_profiler__.totalBindCalls++;
+
       const [, deps] = track(() => {
         try { updateFn(); } catch (e) {}
       }, context);
 
       const binding = { update: updateFn, deps };
       bindings.push(binding);
+
       if (__minui_profiler__.enabled) __minui_profiler__.totalBindingsCreated++;
 
       // Assign a numeric id and store in registry
@@ -800,10 +823,17 @@ export function component<S>(
             const expr = el.getAttribute(attr)?.trim();
             if (expr) {
               const handlerFn = (e: Event) => {
-                const scope = { ...stateProxy, ...context, event: e };
+                // Avoid enumerating `stateProxy` (spreading the proxy triggers traps and
+                // registers unwanted dependencies). Instead pass only captured context keys
+                // plus `event` as parameters; the function runs with `this=stateProxy` so
+                // unqualified identifiers still resolve to properties on the state proxy.
                 try {
-                  const keys = Object.keys(scope);
-                  const values = Object.values(scope);
+                  const captured = { ...context };
+                  const keys = [...Object.keys(captured), 'event'];
+                  const values = [
+                    ...Object.values(captured).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
+                    e
+                  ];
                   const fn = getParamStmtFn(keys, expr);
                   fn.call(stateProxy, ...values);
                   try { flushUpdates(); } catch {}
@@ -872,30 +902,23 @@ export function component<S>(
           const eventName = attr.slice(3);
           const expr = el.getAttribute(attr)?.trim();
           if (expr) {
-            // Capture context at the time of handler creation
+            // Capture only the local context keys to avoid enumerating the state proxy.
             const capturedContext = { ...context };
+            const paramKeys = [...Object.keys(capturedContext), 'event'];
 
             const handler = (e: Event) => {
-              // Merge captured context with state and globals
-              const fullScope = { ...stateProxy, ...capturedContext, event: e };
-              // Ensure emit is available in event handlers
-              if (stateProxy.emit) {
-                fullScope.emit = stateProxy.emit;
-              }
-
               try {
-                const keys = Object.keys(fullScope);
-                // Bind any function values to stateProxy so calling them as bare identifiers
-                // (e.g. `select(i)`) preserves the correct `this` inside the method.
-                const values = Object.values(fullScope).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v));
-                const fn = getParamStmtFn(keys, expr);
+                // Bind functions to stateProxy and provide event as last arg
+                const values = [
+                  ...Object.values(capturedContext).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
+                  e
+                ];
+                const fn = getParamStmtFn(paramKeys, expr);
                 fn.call(stateProxy, ...values);
-                // Run pending updates synchronously
                 try { flushUpdates(); } catch {}
-
               } catch (err) {
                 console.error(`Error in event handler "${expr}":`, err);
-                console.error('Available scope:', Object.keys(fullScope));
+                console.error('Available context keys:', paramKeys);
               }
             };
 

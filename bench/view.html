@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MinUI Bench Results Viewer</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <!-- Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <main>
+    <h1>MinUI Benchmark Results</h1>
+    <div class="controls">
+      <label for="runSelect">Select run:</label>
+      <select id="runSelect"></select>
+      <button id="reload">Reload</button>
+      <div id="meta"></div>
+    </div>
+
+    <section class="charts">
+      <h2>Raw metrics (ms)</h2>
+      <canvas id="rawChart" height="120"></canvas>
+
+      <h2>Normalized metrics (per-item ms)</h2>
+      <canvas id="normChart" height="120"></canvas>
+    </section>
+
+    <footer>
+      <small>Reads <code>bench/results.json</code> from the repository and visualizes stored runs.</small>
+    </footer>
+  </main>
+
+  <script type="module" src="./view.js"></script>
+</body>
+</html>
