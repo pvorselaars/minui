@@ -2,6 +2,10 @@ import { describe, expect, test, beforeEach } from "bun:test";
 import { component } from "./component";
 import { Window } from "happy-dom";
 
+async function nextTick() {
+  await Promise.resolve();
+}
+
 const window = new Window();
 (globalThis as any).HTMLElement = window.HTMLElement;
 (globalThis as any).HTMLInputElement = window.HTMLInputElement;
@@ -26,7 +30,6 @@ describe("component()", () => {
   );
 
   test("should register and render a basic component", async () => {
-
     const { mount } = factory();
     mount(document.body);
 
@@ -62,6 +65,7 @@ describe("component()", () => {
     expect(btn.textContent).toBe("0");
 
     state.count = 42;
+    await nextTick();
     expect(btn.textContent).toBe("42");
   });
 
@@ -113,14 +117,15 @@ describe("component()", () => {
     const btn = root.querySelector("button")!;
     btn.click();
 
+    await nextTick();
     expect(state.clicked).toBe(true);
   });
 
   test("should support inputs", async () => {
     const factory = component(
-    "counter",
-    `<div>Count: {count}</div>`,
-    (input?: { count: number }) => ({ count: input?.count ?? 0 })
+      "counter",
+      `<div>Count: {count}</div>`,
+      (input?: { count: number }) => ({ count: input?.count ?? 0 })
     );
 
     let { root, mount } = factory({ count: 10 });
@@ -128,7 +133,6 @@ describe("component()", () => {
 
     const div = root.querySelector("div")!;
     expect(div.textContent).toBe("Count: 10");
-
   });
 
   test("should pass inputs to sub component", async () => {
@@ -157,310 +161,567 @@ describe("component()", () => {
     expect(p.textContent).toBe("Child count: 5");
 
     state.count = 15;
+    await nextTick();
     expect(p.textContent).toBe("Child count: 15");
-
   });
 
+  test("should cleanup on unmount", async () => {
+    const factory = component(
+      "cleanup-test",
+      `<button on:click="count++">Count: {count}</button>`,
+      () => ({ count: 0 })
+    );
+
+    const { mount, unmount, state } = factory();
+    mount(document.body);
+
+    expect(document.body.innerHTML).toContain("Count: 0");
+
+    state.count = 5;
+    await nextTick();
+    expect(document.body.innerHTML).toContain("Count: 5");
+
+    unmount();
+    expect(document.body.innerHTML).toBe("");
+  });
+
+  test("should call mounted lifecycle", async () => {
+    let mountedCalled = false;
+
+    const factory = component(
+      "lifecycle-test",
+      `<div>Test</div>`,
+      () => ({
+        mounted() {
+          mountedCalled = true;
+        }
+      })
+    );
+
+    const { mount } = factory();
+    mount(document.body);
+
+    expect(mountedCalled).toBe(true);
+  });
+
+  test("should call unmounted lifecycle", async () => {
+    let unmountedCalled = false;
+
+    const factory = component(
+      "lifecycle-unmount",
+      `<div>Test</div>`,
+      () => ({
+        unmounted() {
+          unmountedCalled = true;
+        }
+      })
+    );
+
+    const { mount, unmount } = factory();
+    mount(document.body);
+    unmount();
+
+    expect(unmountedCalled).toBe(true);
+  });
+
+  test("should emit custom events", async () => {
+    const factory = component(
+      "emitter",
+      `<button on:click="emit('custom', { value: 42 })">Emit</button>`,
+      () => ({})
+    );
+
+    const { root, mount } = factory();
+    mount(document.body);
+
+    let eventData: any = null;
+    root.addEventListener('custom', ((e: CustomEvent) => {
+      eventData = e.detail;
+    }) as EventListener);
+
+    const btn = root.querySelector("button")!;
+    btn.click();
+
+    await nextTick();
+    expect(eventData).toEqual({ value: 42 });
+  });
+
+  test("should handle multiple state changes in batch", async () => {
+    const factory = component(
+      "batch-test",
+      `<div>{a} {b} {c}</div>`,
+      () => ({ a: 1, b: 2, c: 3 })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.textContent).toBe("1 2 3");
+
+    // Multiple changes should batch into single update
+    state.a = 10;
+    state.b = 20;
+    state.c = 30;
+
+    await nextTick();
+    expect(div.textContent).toBe("10 20 30");
+  });
 });
 
 describe("for", () => {
+  const factory = component(
+    "list",
+    `<ul>
+      <li for="item in items">{item}</li>
+    </ul>`,
+    (input?: { items: string[] }) => ({ items: input?.items ?? [] })
+  );
+
+  test("should render initial array items", async () => {
+    const { root, mount } = factory({ items: ["A", "B", "C"] });
+    mount(document.body);
+
+    const lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(3);
+    expect(lis[0].textContent).toBe("A");
+    expect(lis[1].textContent).toBe("B");
+    expect(lis[2].textContent).toBe("C");
+  });
+
+  test("should update DOM when array changes", async () => {
+    const { root, mount, state } = factory({ items: ["X", "Y"] });
+    mount(document.body);
+
+    let lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(2);
+    expect(lis[0].textContent).toBe("X");
+
+    // Add a new item
+    state.items.push("Z");
+    await nextTick();
+
+    lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(3);
+    expect(lis[2].textContent).toBe("Z");
+
+    // Remove an item
+    state.items.shift();
+    await nextTick();
+
+    lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(2);
+    expect(lis[0].textContent).toBe("Y");
+  });
+
+  test("should handle empty arrays", async () => {
+    const { root, mount, state } = factory({ items: [] });
+    mount(document.body);
+
+    let lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(0);
+
+    state.items.push("First");
+    await nextTick();
+
+    lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(1);
+    expect(lis[0].textContent).toBe("First");
+  });
+
+  test("should support index variable", async () => {
     const factory = component(
-        "list",
-        `<ul>
-            <li for="item in items">{item}</li>
-        </ul>`,
-        (input?: { items: string[] }) => ({ items: input?.items ?? [] })
+      "indexed-list",
+      `<ul>
+        <li for="item, i in items">{i}: {item}</li>
+      </ul>`,
+      () => ({ items: ["A", "B", "C"] })
     );
 
-    test("should render initial array items", async () => {
-        const { root, mount } = factory({ items: ["A", "B", "C"] });
-        mount(document.body);
+    const { root, mount } = factory();
+    mount(document.body);
 
-        const lis = root.querySelectorAll("li");
-        expect(lis.length).toBe(3);
-        expect(lis[0].textContent).toBe("A");
-        expect(lis[1].textContent).toBe("B");
-        expect(lis[2].textContent).toBe("C");
-    });
+    const lis = root.querySelectorAll("li");
+    expect(lis.length).toBe(3);
+    expect(lis[0].textContent).toBe("0: A");
+    expect(lis[1].textContent).toBe("1: B");
+    expect(lis[2].textContent).toBe("2: C");
+  });
 
-    test("should update DOM when array changes", async () => {
-        const { root, mount, state } = factory({ items: ["X", "Y"] });
-        mount(document.body);
+  test("should handle nested loops", async () => {
+    const factory = component(
+      "nested-loops",
+      `<div for="group in groups">
+        <span for="item in group">{item}</span>
+      </div>`,
+      () => ({ groups: [["a", "b"], ["c", "d"]] })
+    );
 
-        let lis = root.querySelectorAll("li");
-        expect(lis.length).toBe(2);
-        expect(lis[0].textContent).toBe("X");
+    const { root, mount } = factory();
+    mount(document.body);
 
-        // Add a new item
-        state.items.push("Z");
-
-        lis = root.querySelectorAll("li");
-        expect(lis.length).toBe(3);
-        expect(lis[2].textContent).toBe("Z");
-
-        // Remove an item
-        state.items.shift();
-
-        lis = root.querySelectorAll("li");
-        expect(lis.length).toBe(2);
-        expect(lis[0].textContent).toBe("Y");
-    });
-
-    /*
-    test("should update text when array item changes", async () => {
-        const { root, mount, state } = factory({ items: ["foo", "bar"] });
-        mount(document.body);
-
-        const lis = root.querySelectorAll("li");
-        expect(lis[0].textContent).toBe("foo");
-
-        state.items[0] = "baz"; // update the first item
-        expect(lis[0].textContent).toBe("baz");
-    });
-    */
-
+    const divs = root.querySelectorAll("div");
+    expect(divs.length).toBe(2);
+    
+    const spans = root.querySelectorAll("span");
+    expect(spans.length).toBe(4);
+    expect(spans[0].textContent).toBe("a");
+    expect(spans[1].textContent).toBe("b");
+    expect(spans[2].textContent).toBe("c");
+    expect(spans[3].textContent).toBe("d");
+  });
 });
 
 describe("if", () => {
+  const factory = component(
+    "if",
+    `<p if=show>Visible</p>`,
+    () => ({ show: true })
+  );
 
+  test("should render element when condition is true", async () => {
+    const { root, mount } = factory();
+    mount(document.body);
+
+    const p = root.querySelector("p");
+    expect(p).not.toBeNull();
+    expect(p!.textContent).toBe("Visible");
+  });
+
+  test("should not render element when condition is false", async () => {
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    let p = root.querySelector("p");
+    expect(p).not.toBeNull();
+
+    state.show = false;
+    await nextTick();
+    p = root.querySelector("p");
+    expect(p).toBeNull();
+
+    state.show = true;
+    await nextTick();
+    p = root.querySelector("p");
+    expect(p).not.toBeNull();
+    expect(p!.textContent).toBe("Visible");
+  });
+
+  test("should handle complex conditions", async () => {
     const factory = component(
-        "if",
-        `<p if=show>Visible</p>`,
-        () => ({ show: true })
+      "complex-if",
+      `<div if="count > 5 && active">Show me</div>`,
+      () => ({ count: 10, active: true })
     );
 
-    test("should render element when condition is true", async () => {
-        const { root, mount } = factory();
-        mount(document.body);
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-        const p = root.querySelector("p");
-        expect(p).not.toBeNull();
-        expect(p!.textContent).toBe("Visible");
-    });
+    let div = root.querySelector("div");
+    expect(div).not.toBeNull();
 
-    test("should not render element when condition is false", async () => {
-        const { root, mount, state } = factory();
-        mount(document.body);
+    state.count = 3;
+    await nextTick();
+    div = root.querySelector("div");
+    expect(div).toBeNull();
 
-        let p = root.querySelector("p");
-        expect(p).not.toBeNull();
-
-        state.show = false;
-        p = root.querySelector("p");
-        expect(p).toBeNull();
-
-        state.show = true;
-        p = root.querySelector("p");
-        expect(p).not.toBeNull();
-        expect(p!.textContent).toBe("Visible");
-    });
+    state.count = 10;
+    state.active = false;
+    await nextTick();
+    div = root.querySelector("div");
+    expect(div).toBeNull();
+  });
 });
 
 describe("show", () => {
-
-    const factory = component(
+  const factory = component(
     "show",
     `<div show=visible>Hello</div>`,
     () => ({ visible: true })
+  );
+
+  test("should show element when condition is true", async () => {
+    const { root, mount } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.style.display).toBe("");
+  });
+
+  test("should hide element when condition is false", async () => {
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.style.display).toBe("");
+
+    state.visible = false;
+    await nextTick();
+    expect(div.style.display).toBe("none");
+
+    state.visible = true;
+    await nextTick();
+    expect(div.style.display).toBe("");
+  });
+
+  test("should preserve original display value", async () => {
+    const factory = component(
+      "show-display",
+      `<div show=visible style="display: flex;">Flex</div>`,
+      () => ({ visible: true })
     );
 
-    test("should show element when condition is true", async () => {
-        const { root, mount } = factory();
-        mount(document.body);
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-        const div = root.querySelector("div")!;
-        expect(div.style.display).toBe("");
-    });
+    const div = root.querySelector("div")!;
+    expect(div.style.display).toBe("flex");
 
-    test("should hide element when condition is false", async () => {
-        const { root, mount, state } = factory();
-        mount(document.body);
+    state.visible = false;
+    await nextTick();
+    expect(div.style.display).toBe("none");
 
-        const div = root.querySelector("div")!;
-        expect(div.style.display).toBe("");
-
-        state.visible = false;
-        expect(div.style.display).toBe("none");
-
-        state.visible = true;
-        expect(div.style.display).toBe("");
-    });
+    state.visible = true;
+    await nextTick();
+    expect(div.style.display).toBe("flex");
+  });
 });
 
 describe("bind", () => {
+  const factory = component(
+    "bind-input",
+    `<input bind="name" />`,
+    () => ({ name: "Alice" })
+  );
 
+  test("state updates input value", async () => {
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const input = root.querySelector("input")!;
+    expect(input.value).toBe("Alice");
+
+    state.name = "Bob";
+    await nextTick();
+    expect(input.value).toBe("Bob");
+  });
+
+  test("input updates state", async () => {
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const input = root.querySelector("input")!;
+    expect(state.name).toBe("Alice");
+
+    // Simulate user typing
+    input.value = "Charlie";
+    const event = new Event("input", { bubbles: true });
+    Object.defineProperty(event, 'target', { value: input, writable: false });
+    input.dispatchEvent(event);
+
+    await nextTick();
+    expect(state.name).toBe("Charlie");
+  });
+
+  test("checkbox binding works", async () => {
     const factory = component(
-        "bind-input",
-        `<input bind="name" />`,
-        () => ({ name: "Alice" })
+      "bind-checkbox",
+      `<input type="checkbox" bind="checked" />`,
+      () => ({ checked: true })
     );
 
-    test("state updates input value", async () => {
-        const { root, mount, state } = factory();
-        mount(document.body);
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-        const input = root.querySelector("input")!;
-        expect(input.value).toBe("Alice");
+    const checkbox = root.querySelector("input")!;
+    expect(checkbox.checked).toBe(true);
 
-        state.name = "Bob";
-        expect(input.value).toBe("Bob");
-    });
+    state.checked = false;
+    await nextTick();
+    expect(checkbox.checked).toBe(false);
 
-    test("input updates state", async () => {
-        const { root, mount, state } = factory();
-        mount(document.body);
+    checkbox.checked = true;
+    const event = new Event("input", { bubbles: true });
+    Object.defineProperty(event, 'target', { value: checkbox, writable: false });
+    checkbox.dispatchEvent(event);
 
-        const input = root.querySelector("input")!;
-        expect(state.name).toBe("Alice");
+    await nextTick();
+    expect(state.checked).toBe(true);
+  });
 
-        // Simulate user typing
-        input.value = "Charlie";
-        const event = new Event("input", { bubbles: true });
-        Object.defineProperty(event, 'target', { value: input, writable: false });
-        input.dispatchEvent(event);
+  test("select binding works", async () => {
+    const factory = component(
+      "bind-select",
+      `<select bind="color">
+        <option value="red">Red</option>
+        <option value="blue">Blue</option>
+      </select>`,
+      () => ({ color: "blue" })
+    );
 
-        expect(state.name).toBe("Charlie");
-    });
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-    test("checkbox binding works", async () => {
-        const factory = component(
-        "bind-checkbox",
-        `<input type="checkbox" bind="checked" />`,
-        () => ({ checked: true })
-        );
+    const select = root.querySelector("select")!;
+    expect(select.value).toBe("blue");
 
-        const { root, mount, state } = factory();
-        mount(document.body);
+    state.color = "red";
+    await nextTick();
+    expect(select.value).toBe("red");
 
-        const checkbox = root.querySelector("input")!;
-        expect(checkbox.checked).toBe(true);
+    select.value = "blue";
+    const event = new Event("input", { bubbles: true });
+    Object.defineProperty(event, 'target', { value: select, writable: false });
+    select.dispatchEvent(event);
 
-        state.checked = false;
-        expect(checkbox.checked).toBe(false);
+    await nextTick();
+    expect(state.color).toBe("blue");
+  });
 
-        checkbox.checked = true;
-        const event = new Event("input", { bubbles: true });
-        Object.defineProperty(event, 'target', { value: checkbox, writable: false });
-        checkbox.dispatchEvent(event);
+  test("textarea binding works", async () => {
+    const factory = component(
+      "bind-textarea",
+      `<textarea bind="message"></textarea>`,
+      () => ({ message: "Hello World" })
+    );
 
-        expect(state.checked).toBe(true);
-    });
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-    test("select binding works", async () => {
-        const factory = component(
-        "bind-select",
-        `<select bind="color">
-            <option value="red">Red</option>
-            <option value="blue">Blue</option>
-        </select>`,
-        () => ({ color: "blue" })
-        );
+    const textarea = root.querySelector("textarea")!;
+    expect(textarea.value).toBe("Hello World");
 
-        const { root, mount, state } = factory();
-        mount(document.body);
+    state.message = "Updated message";
+    await nextTick();
+    expect(textarea.value).toBe("Updated message");
 
-        const select = root.querySelector("select")!;
-        expect(select.value).toBe("blue");
+    textarea.value = "User typed";
+    const event = new Event("input", { bubbles: true });
+    Object.defineProperty(event, 'target', { value: textarea, writable: false });
+    textarea.dispatchEvent(event);
 
-        state.color = "red";
-        expect(select.value).toBe("red");
+    await nextTick();
+    expect(state.message).toBe("User typed");
+  });
 
-        select.value = "blue";
+  test("deep binding works", async () => {
+    const factory = component(
+      "bind-deep",
+      `<input type=text bind=obj.prop.prop />`,
+      () => ({ obj: { prop: { prop: "value" }} })
+    );
 
-        const event = new Event("input", { bubbles: true });
-        Object.defineProperty(event, 'target', { value: select, writable: false });
-        select.dispatchEvent(event);
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-        expect(state.color).toBe("blue");
-    });
+    const input = root.querySelector("input")!;
+    expect(input.value).toBe("value");
 
-    test("textarea binding works", async () => {
-        const factory = component(
-        "bind-textarea",
-        `<textarea bind="message"></textarea>`,
-        () => ({ message: "Hello World" })
-        );
+    input.value = "new value"
+    const event = new Event("input", { bubbles: true });
+    Object.defineProperty(event, 'target', { value: input, writable: false });
+    input.dispatchEvent(event);
 
-        const { root, mount, state } = factory();
-        mount(document.body);
+    await nextTick();
+    expect(state.obj.prop.prop).toBe("new value");
+  });
 
-        const textarea = root.querySelector("textarea")!;
-        expect(textarea.value).toBe("Hello World");
+  test("radio button binding works", async () => {
+    const factory = component(
+      "bind-radio",
+      `<div>
+        <input type="radio" bind="color" value="red" />
+        <input type="radio" bind="color" value="blue" />
+      </div>`,
+      () => ({ color: "red" })
+    );
 
-        state.message = "Updated message";
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-        expect(textarea.value).toBe("Updated message");
+    const radios = root.querySelectorAll("input");
+    expect(radios[0].checked).toBe(true);
+    expect(radios[1].checked).toBe(false);
 
-        textarea.value = "User typed";
-        const event = new Event("input", { bubbles: true });
-        Object.defineProperty(event, 'target', { value: textarea, writable: false });
-        textarea.dispatchEvent(event);
-
-        expect(state.message).toBe("User typed");
-    });
-
-    test("deep binding works", async () => {
-        const factory = component(
-        "bind-deep",
-        `<input type=text bind=obj.prop.prop />`,
-        () => ({ obj: { prop: { prop: "value" }} })
-        );
-
-        const { root, mount, state } = factory();
-        mount(document.body);
-
-        const input = root.querySelector("input")!;
-        expect(input.value).toBe("value");
-
-        input.value = "new value"
-        const event = new Event("input", { bubbles: true });
-        Object.defineProperty(event, 'target', { value: input, writable: false });
-        input.dispatchEvent(event);
-
-        expect(state.obj.prop.prop).toBe("new value");
-    });
-
+    state.color = "blue";
+    await nextTick();
+    expect(radios[0].checked).toBe(false);
+    expect(radios[1].checked).toBe(true);
+  });
 });
 
 describe("attribute binding", () => {
-
-    const factory = component(
+  const factory = component(
     "btn",
     `<button disabled=disabled>Click!</button>`,
     () => ({ disabled: true })
+  );
+
+  test("should evaluate expression for attribute", async () => {
+    const { root, mount } = factory();
+    mount(document.body);
+
+    const btn = root.querySelector("button")!;
+    expect(btn.disabled).toBe(true);
+  });
+
+  test("state change should update attribute", async () => {
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const btn = root.querySelector("button")!;
+    expect(btn.disabled).toBe(true);
+
+    state.disabled = false;
+    await nextTick();
+    expect(btn.disabled).toBe(false);
+  });
+
+  test("should handle dynamic class attributes", async () => {
+    const factory = component(
+      "dynamic-class",
+      `<div class="active ? 'on' : 'off'">Status</div>`,
+      () => ({ active: false })
     );
 
-    test("should evaluate expression for attribute", async () => {
-        const { root, mount } = factory();
-        mount(document.body);
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-        const btn = root.querySelector("button")!;
-        expect(btn.disabled).toBe(true);
-    });
+    const div = root.querySelector("div")!;
+    expect(div.className).toBe("off");
 
-    test("state change should update attribute", async () => {
-        const { root, mount, state } = factory();
-        mount(document.body);
+    state.active = true;
+    await nextTick();
+    expect(div.className).toBe("on");
+  });
 
-        const btn = root.querySelector("button")!;
-        expect(btn.disabled).toBe(true);
+  test("should handle data attributes", async () => {
+    const factory = component(
+      "data-attrs",
+      `<div data-id=id>Item</div>`,
+      () => ({ id: 123 })
+    );
 
-        state.disabled = false;
-        expect(btn.disabled).toBe(false);
+    const { root, mount, state } = factory();
+    mount(document.body);
 
-    });
+    const div = root.querySelector("div")!;
+    expect(div.getAttribute("data-id")).toBe("123");
+
+    state.id = 456;
+    await nextTick();
+    expect(div.getAttribute("data-id")).toBe("456");
+  });
 });
 
 describe("subcomponent array propagation", () => {
   test("should pass array to subcomponent", async () => {
-    // Child component that displays items
     const childFactory = component(
       "item-list",
       `<ul><li for="item in items">{item}</li></ul>`,
       (input?: { items: string[] }) => ({ items: input?.items ?? [] })
     );
 
-    // Parent component that passes array
     const parentFactory = component(
       "parent-list",
       `<item-list items={myItems}></item-list>`,
@@ -498,8 +759,8 @@ describe("subcomponent array propagation", () => {
     expect(lis[0].textContent).toBe("X");
     expect(lis[1].textContent).toBe("Y");
 
-    // Add item to parent array
     state.data.push("Z");
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(3);
@@ -525,8 +786,8 @@ describe("subcomponent array propagation", () => {
     let lis = document.querySelectorAll("li");
     expect(lis.length).toBe(3);
 
-    // Remove item from parent array
     state.data.pop();
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(2);
@@ -554,8 +815,8 @@ describe("subcomponent array propagation", () => {
     expect(lis.length).toBe(3);
     expect(lis[0].textContent).toBe("First");
 
-    // Remove first item
     state.data.shift();
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(2);
@@ -583,8 +844,8 @@ describe("subcomponent array propagation", () => {
     expect(lis.length).toBe(2);
     expect(lis[0].textContent).toBe("Old1");
 
-    // Replace entire array
     state.data = ["New1", "New2", "New3"];
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(3);
@@ -621,8 +882,8 @@ describe("subcomponent array propagation", () => {
     expect(lis[0].textContent).toBe("Alice - 30");
     expect(lis[1].textContent).toBe("Bob - 25");
 
-    // Add new user
     state.people.push({ name: "Charlie", age: 35 });
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(3);
@@ -638,12 +899,10 @@ describe("subcomponent array propagation", () => {
 
     const parentFactory = component(
       "multi-list",
-      `
-        <div>
-          <simple-list items={fruits}></simple-list>
-          <simple-list items={vegetables}></simple-list>
-        </div>
-      `,
+      `<div>
+        <simple-list items={fruits}></simple-list>
+        <simple-list items={vegetables}></simple-list>
+      </div>`,
       () => ({ 
         fruits: ["Apple", "Banana"],
         vegetables: ["Carrot", "Broccoli"]
@@ -660,36 +919,33 @@ describe("subcomponent array propagation", () => {
     expect(lis[2].textContent).toBe("Carrot");
     expect(lis[3].textContent).toBe("Broccoli");
 
-    // Update first array
     state.fruits.push("Orange");
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(5);
     expect(lis[2].textContent).toBe("Orange");
 
-    // Update second array
     state.vegetables.shift();
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(4);
   });
 
   test("should work with nested subcomponents and arrays", async () => {
-    // Inner list component
     const innerListFactory = component(
       "inner-list-comp",
       `<ul><li for="item in items">{item}</li></ul>`,
       (input?: { items: string[] }) => ({ items: input?.items ?? [] })
     );
 
-    // Middle component that wraps the inner list
     const middleFactory = component(
       "middle-wrapper-comp",
       `<div><inner-list-comp items={data}></inner-list-comp></div>`,
       (input?: { data: string[] }) => ({ data: input?.data ?? [] })
     );
 
-    // Outer parent component
     const parentFactory = component(
       "nested-parent-comp",
       `<middle-wrapper-comp data={myItems}></middle-wrapper-comp>`,
@@ -704,8 +960,8 @@ describe("subcomponent array propagation", () => {
     expect(lis[0].textContent).toBe("One");
     expect(lis[1].textContent).toBe("Two");
 
-    // Add item to outermost parent
     state.myItems.push("Three");
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(3);
@@ -731,9 +987,9 @@ describe("subcomponent array propagation", () => {
     let lis = document.querySelectorAll("li");
     expect(lis.length).toBe(0);
 
-    // Add items to empty array
     state.data.push("First");
     state.data.push("Second");
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(2);
@@ -760,8 +1016,8 @@ describe("subcomponent array propagation", () => {
     let lis = document.querySelectorAll("li");
     expect(lis.length).toBe(4);
 
-    // Remove middle items using splice
     state.data.splice(1, 2);
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(2);
@@ -772,12 +1028,10 @@ describe("subcomponent array propagation", () => {
   test("should handle subcomponent with non-array props alongside arrays", async () => {
     const childFactory = component(
       "mixed-props",
-      `
-        <div>
-          <h3>{title}</h3>
-          <ul><li for="item in items">{item}</li></ul>
-        </div>
-      `,
+      `<div>
+        <h3>{title}</h3>
+        <ul><li for="item in items">{item}</li></ul>
+      </div>`,
       (input?: { title: string, items: string[] }) => ({ 
         title: input?.title ?? "",
         items: input?.items ?? [] 
@@ -802,9 +1056,9 @@ describe("subcomponent array propagation", () => {
     let lis = document.querySelectorAll("li");
     expect(lis.length).toBe(2);
 
-    // Update both props
     state.heading = "Updated List";
     state.list.push("Item3");
+    await nextTick();
 
     expect(h3?.textContent).toBe("Updated List");
     lis = document.querySelectorAll("li");
@@ -836,8 +1090,8 @@ describe("subcomponent array propagation", () => {
     expect(lis.length).toBe(2);
     expect(lis[0].textContent).toBe("A");
 
-    // Simulate async update (like fetching from API)
     state.items = ["X", "Y", "Z"];
+    await nextTick();
 
     lis = document.querySelectorAll("li");
     expect(lis.length).toBe(3);
@@ -867,6 +1121,7 @@ describe("computed properties", () => {
     expect(div.textContent).toBe("10");
 
     state.count = 10;
+    await nextTick();
     expect(div.textContent).toBe("20");
   });
 
@@ -895,12 +1150,14 @@ describe("computed properties", () => {
     expect(lis.length).toBe(3);
 
     state.query = "a";
+    await nextTick();
     lis = root.querySelectorAll("li");
     expect(lis.length).toBe(2);
     expect(lis[0].textContent).toBe("Apple");
     expect(lis[1].textContent).toBe("Banana");
 
     state.query = "";
+    await nextTick();
     lis = root.querySelectorAll("li");
     expect(lis.length).toBe(3);
   });
@@ -924,10 +1181,65 @@ describe("computed properties", () => {
     expect(div.textContent).toBe("3");
 
     state.items.push(4);
+    await nextTick();
     expect(div.textContent).toBe("4");
 
     state.items = [1, 2];
+    await nextTick();
     expect(div.textContent).toBe("2");
+  });
+
+  test("should handle chained computed properties", async () => {
+    const factory = component(
+      "chained-computed",
+      `<div>{quadrupled}</div>`,
+      () => ({
+        count: 5,
+        get doubled() {
+          return this.count * 2;
+        },
+        get quadrupled() {
+          return this.doubled * 2;
+        }
+      })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.textContent).toBe("20");
+
+    state.count = 3;
+    await nextTick();
+    expect(div.textContent).toBe("12");
+  });
+
+  test("should support multiple computed properties", async () => {
+    const factory = component(
+      "multi-computed",
+      `<div>{sum} {product}</div>`,
+      () => ({
+        a: 2,
+        b: 3,
+        get sum() {
+          return this.a + this.b;
+        },
+        get product() {
+          return this.a * this.b;
+        }
+      })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.textContent).toBe("5 6");
+
+    state.a = 4;
+    await nextTick();
+    expect(div.textContent).toBe("7 12");
   });
 });
 
@@ -947,6 +1259,7 @@ describe('attribute bindings with loopContext', () => {
     expect(divs[1].className).toBe('');
 
     state.id = 1;
+    await nextTick();
     expect(divs[0].className).toBe('');
     expect(divs[1].className).toBe('selected');
   });
@@ -965,9 +1278,118 @@ describe('attribute bindings with loopContext', () => {
     expect(div.className).toBe('off');
 
     state.active = true;
+    await nextTick();
     expect(div.className).toBe('on');
 
     state.active = false;
+    await nextTick();
     expect(div.className).toBe('off');
+  });
+});
+
+describe("edge cases and error handling", () => {
+  test("should handle undefined values in text interpolation", async () => {
+    const factory = component(
+      "undefined-test",
+      `<div>{value}</div>`,
+      () => ({ value: undefined as string | undefined })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.textContent).toBe("");
+
+    state.value = "defined";
+    await nextTick();
+    expect(div.textContent).toBe("defined");
+  });
+
+  test("should handle null values", async () => {
+    const factory = component(
+      "null-test",
+      `<div>{value}</div>`,
+      () => ({ value: null as string | null })
+    );
+
+    const { root, mount } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.textContent).toBe("");
+  });
+
+  test("should handle nested object updates", async () => {
+    const factory = component(
+      "nested-test",
+      `<div>{user.name} - {user.age}</div>`,
+      () => ({ user: { name: "Alice", age: 30 } })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+    expect(div.textContent).toBe("Alice - 30");
+
+    state.user.name = "Bob";
+    await nextTick();
+    expect(div.textContent).toBe("Bob - 30");
+
+    state.user = { name: "Charlie", age: 25 };
+    await nextTick();
+    expect(div.textContent).toBe("Charlie - 25");
+  });
+
+  test("should handle rapid successive updates", async () => {
+    const factory = component(
+      "rapid-test",
+      `<div>{count}</div>`,
+      () => ({ count: 0 })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const div = root.querySelector("div")!;
+
+    // Rapid updates should batch
+    for (let i = 1; i <= 100; i++) {
+      state.count = i;
+    }
+
+    await nextTick();
+    expect(div.textContent).toBe("100");
+  });
+
+  test("should handle array sort and reverse", async () => {
+    const factory = component(
+      "sort-test",
+      `<ul><li for="item in items">{item}</li></ul>`,
+      () => ({ items: [3, 1, 2] })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    let lis = root.querySelectorAll("li");
+    expect(lis[0].textContent).toBe("3");
+
+    state.items.sort();
+    await nextTick();
+
+    lis = root.querySelectorAll("li");
+    expect(lis[0].textContent).toBe("1");
+    expect(lis[1].textContent).toBe("2");
+    expect(lis[2].textContent).toBe("3");
+
+    state.items.reverse();
+    await nextTick();
+
+    lis = root.querySelectorAll("li");
+    expect(lis[0].textContent).toBe("3");
+    expect(lis[1].textContent).toBe("2");
+    expect(lis[2].textContent).toBe("1");
   });
 });
