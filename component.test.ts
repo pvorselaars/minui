@@ -348,6 +348,56 @@ describe("for", () => {
     expect(lis[2].textContent).toBe("2: C");
   });
 
+  test('for-loop elements support event binding', async () => {
+    const factory = component(
+      'for-event',
+      `<ul><li for="item, i in items" on:click="last = item">{item}</li></ul>`,
+      () => ({ items: ['A', 'B', 'C'], last: null as string | null })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const lis = root.querySelectorAll('li');
+    const second = lis[1] as HTMLLIElement;
+    second.click();
+
+    await nextTick();
+    expect(state.last).toBe('B');
+  });
+
+  test('for-loop supports select(i) with selected-by', async () => {
+    const factory = component(
+      'for-select',
+      `<div class=results>
+        <div selected-by=selected on:click="select(i)" for="item, i in items">{item}</div>
+      </div>`,
+      () => ({
+        items: ['A','B','C'],
+        selected: -1,
+        select(i: number) { this.selected = i }
+      })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const divs = root.querySelectorAll('.results > div');
+    expect(divs[0].className).toBe('');
+
+    // call the method directly
+    state.select(1);
+    await nextTick();
+    expect(divs[1].className).toBe('selected');
+
+    // click the third
+    const evt = new Event('click', { bubbles: true });
+    Object.defineProperty(evt, 'target', { value: divs[2], writable: false });
+    (divs[2] as HTMLElement).dispatchEvent(evt);
+    await nextTick();
+    expect(divs[2].className).toBe('selected');
+  });
+
   test("should handle nested loops", async () => {
     const factory = component(
       "nested-loops",
@@ -1285,6 +1335,30 @@ describe('attribute bindings with loopContext', () => {
     await nextTick();
     expect(div.className).toBe('off');
   });
+
+  test('selected-by optimization toggles selected class efficiently', async () => {
+    const factory = component(
+      'select-opt',
+      `<ul><li for="item, i in items" selected-by="selected">{item}</li></ul>`,
+      () => ({ items: ['One', 'Two', 'Three'], selected: 0 })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const lis = root.querySelectorAll('li');
+    expect(lis[0].className).toBe('selected');
+    expect(lis[1].className).toBe('');
+    expect(lis[2].className).toBe('');
+
+    // Change selection and ensure classes update
+    state.selected = 2;
+    await nextTick();
+
+    expect(lis[0].className).toBe('');
+    expect(lis[1].className).toBe('');
+    expect(lis[2].className).toBe('selected');
+  });
 });
 
 describe("edge cases and error handling", () => {
@@ -1392,4 +1466,27 @@ describe("edge cases and error handling", () => {
     expect(lis[1].textContent).toBe("2");
     expect(lis[2].textContent).toBe("1");
   });
+});
+
+test('parent listens to child component events via on:custom attribute', async () => {
+  const child = component(
+    'event-child',
+    `<button on:click="emit('child-event', { value: 7 })">Fire</button>`,
+    () => ({})
+  );
+
+  const parent = component(
+    'event-parent',
+    `<event-child on:child-event="received = event.detail"></event-child>`,
+    () => ({ received: null as any })
+  );
+
+  const { root, mount, state } = parent();
+  mount(document.body);
+
+  const btn = root.querySelector('event-child button') as HTMLButtonElement;
+  btn.click();
+
+  await nextTick();
+  expect(state.received).toEqual({ value: 7 });
 });
