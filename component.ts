@@ -1,41 +1,5 @@
 import { go } from "./router";
 
-// Lightweight runtime profiler. Enable by setting env MINUI_PROFILER=1 when running (Node/Bun).
-const PROFILER_ENABLED = typeof process !== 'undefined' && process.env && process.env.MINUI_PROFILER === '1';
-
-export const __minui_profiler__ = {
-  enabled: PROFILER_ENABLED,
-  totalBindingsCreated: 0,
-  totalBindCalls: 0,
-  bindingUpdates: 0,
-  bindingUpdateTime: 0, // ms
-  flushCount: 0,
-  flushTime: 0, // ms
-  depMapSamples: [] as number[],
-  reset() {
-    this.totalBindingsCreated = 0;
-    this.totalBindCalls = 0;
-    this.bindingUpdates = 0;
-    this.bindingUpdateTime = 0;
-    this.flushCount = 0;
-    this.flushTime = 0;
-    this.depMapSamples.length = 0;
-  },
-  snapshot() {
-    return {
-      enabled: this.enabled,
-      totalBindingsCreated: this.totalBindingsCreated,
-      totalBindCalls: this.totalBindCalls,
-      bindingUpdates: this.bindingUpdates,
-      bindingUpdateTime: this.bindingUpdateTime,
-      flushCount: this.flushCount,
-      flushTime: this.flushTime,
-      avgFlushTime: this.flushCount ? this.flushTime / this.flushCount : 0,
-      depMapSamples: Array.from(this.depMapSamples)
-    };
-  }
-};
-
 const components: Record<string, (input?: any) => any> = {};
 const styles = new Set<string>();
 
@@ -306,12 +270,7 @@ export function component<S>(
       // Process all pending updates using depMap for O(sum(deps touched)) instead of O(keys * allBindings)
       const updatedBindings = new Set<number>();
 
-      const flushStart = __minui_profiler__.enabled ? Date.now() : 0;
-
       for (const k of keys) {
-        if (__minui_profiler__.enabled) {
-          __minui_profiler__.depMapSamples.push(depMap.get(k)?.length ?? 0);
-        }
         // (no optimized index updates)
 
         const set = depMap.get(k);
@@ -323,15 +282,7 @@ export function component<S>(
             if (!binding) continue; // was removed
             if (!updatedBindings.has(id)) {
               updatedBindings.add(id);
-              if (__minui_profiler__.enabled) {
-                const bStart = Date.now();
-                binding.update();
-                const bEnd = Date.now();
-                __minui_profiler__.bindingUpdates++;
-                __minui_profiler__.bindingUpdateTime += (bEnd - bStart);
-              } else {
-                binding.update();
-              }
+              binding.update();
             }
           }
         }
@@ -352,17 +303,9 @@ export function component<S>(
 
       // Clear pending array ops map
       pendingArrayOps.clear();
-
-      if (__minui_profiler__.enabled) {
-        const flushEnd = Date.now();
-        __minui_profiler__.flushCount++;
-        __minui_profiler__.flushTime += (flushEnd - flushStart);
-      }
     }
 
     function bind(updateFn: () => void, context: Record<string, any> = {}): () => void {
-      if (__minui_profiler__.enabled) __minui_profiler__.totalBindCalls++;
-
       const deps = new Set<string>();
       const prev = tracking;
       tracking = deps;
@@ -373,8 +316,6 @@ export function component<S>(
 
       const binding = { update: updateFn, deps };
       bindings.push(binding);
-
-      if (__minui_profiler__.enabled) __minui_profiler__.totalBindingsCreated++;
 
       // Assign a numeric id and store in registry
       const id = ++bindingIdCounter;
