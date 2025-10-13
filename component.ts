@@ -372,13 +372,16 @@ export function component<S>(
       }
     }
 
-    // Create a reactive binding with cleanup
     function bind(updateFn: () => void, context: Record<string, any> = {}): () => void {
       if (__minui_profiler__.enabled) __minui_profiler__.totalBindCalls++;
 
-      const [, deps] = track(() => {
-        try { updateFn(); } catch (e) {}
-      }, context);
+      const deps = new Set<string>();
+      const prev = tracking;
+      tracking = deps;
+      try {
+        updateFn();
+      } catch (e) {}
+      tracking = prev;
 
       const binding = { update: updateFn, deps };
       bindings.push(binding);
