@@ -700,6 +700,60 @@ describe("bind", () => {
   });
 });
 
+describe("automatic form binding", () => {
+  test("binds object to form inputs automatically", async () => {
+    const factory = component(
+      "form-bind",
+      `<div bind="user">
+        <input name="name" />
+        <input name="email" />
+        <input name="age" type="number" />
+        <input name="newsletter" type="checkbox" />
+      </div>`,
+      () => ({
+        user: {
+          name: "John",
+          email: "john@example.com",
+          age: 25,
+          newsletter: true
+        }
+      })
+    );
+
+    const { root, mount, state } = factory();
+    mount(document.body);
+
+    const inputs = root.querySelectorAll("input");
+    expect(inputs[0].value).toBe("John");
+    expect(inputs[1].value).toBe("john@example.com");
+    expect(inputs[2].value).toBe("25");
+    expect(inputs[3].checked).toBe(true);
+
+    // Test updating state updates inputs
+    state.user.name = "Jane";
+    state.user.age = 30;
+    state.user.newsletter = false;
+    await nextTick();
+
+    expect(inputs[0].value).toBe("Jane");
+    expect(inputs[2].value).toBe("30");
+    expect(inputs[3].checked).toBe(false);
+
+    // Test updating inputs updates state
+    inputs[0].value = "Bob";
+    const event0 = new Event("input", { bubbles: true });
+    Object.defineProperty(event0, 'target', { value: inputs[0], writable: false });
+    inputs[0].dispatchEvent(event0);
+    expect(state.user.name).toBe("Bob");
+
+    inputs[3].checked = true;
+    const event3 = new Event("input", { bubbles: true });
+    Object.defineProperty(event3, 'target', { value: inputs[3], writable: false });
+    inputs[3].dispatchEvent(event3);
+    expect(state.user.newsletter).toBe(true);
+  });
+});
+
 describe("attribute binding", () => {
   const factory = component(
     "btn",

@@ -454,8 +454,60 @@ export function component<S>(
         // Set up two-way binding for bind attributes
         for (const { attr, expr } of attrExprs) {
           if (attr === 'bind') {
-            const expression = expr;
+            let expression = expr;
+            
+            // Check if this element has form inputs as children (automatic form binding)
+            const formInputs = el.querySelectorAll('input[name], select[name], textarea[name]');
+            if (formInputs.length > 0) {
+              // Automatic form binding - set bind attributes on inputs
+              formInputs.forEach((input: Element) => {
+                const inputName = input.getAttribute('name');
+                if (inputName && !input.hasAttribute('bind')) {
+                  input.setAttribute('bind', `${expression}.${inputName}`);
+                }
+              });
+            } else {
+              // Individual input binding (should not happen here anymore, but keep for compatibility)
+              const elInput = el as HTMLInputElement;
+              if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                el.addEventListener('input', (e) => {
+                  if ((e.target as HTMLInputElement).checked) {
+                    (stateProxy as any)[expression] = (e.target as HTMLInputElement).value;
+                  }
+                });
+              } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                el.addEventListener('input', (e) => {
+                  (stateProxy as any)[expression] = (e.target as HTMLInputElement).checked;
+                });
+              } else {
+                el.addEventListener('input', (e) => {
+                  (stateProxy as any)[expression] = (e.target as any).value;
+                });
+              }
+              
+              // Set up binding from state to input
+              bind(() => {
+                const value = evaluate(expression, context);
+                if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                  elInput.checked = value === elInput.value;
+                } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                  elInput.checked = !!value;
+                } else {
+                  (el as any).value = value;
+                }
+              }, context);
+            }
+          }
+        }
+        
+        // Check for automatic binding from parent
+        if (!attrExprs.some(({ attr }) => attr === 'bind') && el.hasAttribute('name')) {
+          const parentBind = el.parentElement?.getAttribute('bind');
+          if (parentBind) {
+            const expression = `${parentBind}.${el.getAttribute('name')}`;
             const elInput = el as HTMLInputElement;
+            
+            // Set up event listener
             if (el.tagName === 'INPUT' && elInput.type === 'radio') {
               el.addEventListener('input', (e) => {
                 if ((e.target as HTMLInputElement).checked) {
@@ -471,6 +523,18 @@ export function component<S>(
                 (stateProxy as any)[expression] = (e.target as any).value;
               });
             }
+            
+            // Set up binding from state to input
+            bind(() => {
+              const value = evaluate(expression, context);
+              if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                elInput.checked = value === elInput.value;
+              } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                elInput.checked = !!value;
+              } else {
+                (el as any).value = value;
+              }
+            }, context);
           }
         }
         
@@ -808,56 +872,118 @@ export function component<S>(
         const key = el.getAttribute('bind')!.trim();
         el.removeAttribute('bind');
 
-        const getValue = () => key.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
-        const setValue = (val: any) => {
-          const keys = key.split('.');
-          const last = keys.pop()!;
-          const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
-          if (parent) parent[last] = val;
-        };
+        // Check if this element has form inputs as children (automatic form binding)
+        const formInputs = el.querySelectorAll('input[name], select[name], textarea[name]');
+        if (formInputs.length > 0) {
+          // Automatic form binding - set up bindings for inputs
+          formInputs.forEach((input: Element) => {
+            const inputEl = input as HTMLElement;
+            const inputName = input.getAttribute('name');
+            if (inputName) {
+              const inputKey = `${key}.${inputName}`;
+              const getValue = () => inputKey.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
+              const setValue = (val: any) => {
+                const keys = inputKey.split('.');
+                const last = keys.pop()!;
+                const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
+                if (parent) parent[last] = val;
+              };
 
-        // Initial value
-        const initialValue = getValue();
-        if (el instanceof HTMLInputElement) {
-          if (el.type === 'checkbox') el.checked = !!initialValue;
-          else if (el.type === 'radio') el.checked = el.value === initialValue;
-          else el.value = initialValue ?? '';
-        } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
-          el.value = initialValue ?? '';
-        }
+              // Initial value
+              const initialValue = getValue();
+              if (inputEl instanceof HTMLInputElement) {
+                if (inputEl.type === 'checkbox') inputEl.checked = !!initialValue;
+                else if (inputEl.type === 'radio') inputEl.checked = inputEl.value === initialValue;
+                else inputEl.value = initialValue ?? '';
+              } else if (inputEl instanceof HTMLSelectElement || inputEl instanceof HTMLTextAreaElement) {
+                inputEl.value = initialValue ?? '';
+              }
 
-        // State -> DOM
-        bind(() => {
-          const value = getValue();
+              // State -> DOM
+              bind(() => {
+                const value = getValue();
+                if (inputEl instanceof HTMLInputElement) {
+                  if (inputEl.type === 'checkbox') inputEl.checked = !!value;
+                  else if (inputEl.type === 'radio') inputEl.checked = inputEl.value === value;
+                  else inputEl.value = value ?? '';
+                } else if (inputEl instanceof HTMLSelectElement || inputEl instanceof HTMLTextAreaElement) {
+                  inputEl.value = value ?? '';
+                }
+              }, context);
+
+              // DOM -> State
+              const updateState = (e: Event) => {
+                const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+                if (target instanceof HTMLInputElement) {
+                  if (target.type === 'checkbox') setValue(target.checked);
+                  else if (target.type === 'radio') setValue(target.checked ? target.value : '');
+                  else setValue(target.value);
+                }
+              };
+
+              inputEl.addEventListener('input', updateState);
+              inputEl.addEventListener('change', updateState);
+              
+              // Cleanup event listeners
+              cleanups.push(() => {
+                inputEl.removeEventListener('input', updateState);
+                inputEl.removeEventListener('change', updateState);
+              });
+            }
+          });
+        } else {
+          // Individual element binding
+          const getValue = () => key.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
+          const setValue = (val: any) => {
+            const keys = key.split('.');
+            const last = keys.pop()!;
+            const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
+            if (parent) parent[last] = val;
+          };
+
+          // Initial value
+          const initialValue = getValue();
           if (el instanceof HTMLInputElement) {
-            if (el.type === 'checkbox') el.checked = !!value;
-            else if (el.type === 'radio') el.checked = el.value === value;
-            else el.value = value ?? '';
+            if (el.type === 'checkbox') el.checked = !!initialValue;
+            else if (el.type === 'radio') el.checked = el.value === initialValue;
+            else el.value = initialValue ?? '';
           } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
-            el.value = value ?? '';
+            el.value = initialValue ?? '';
           }
-        }, context);
 
-        // DOM -> State
-        const updateState = (e: Event) => {
-          const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-          if (target instanceof HTMLInputElement) {
-            if (target.type === 'checkbox') setValue(target.checked);
-            else if (target.type === 'radio') setValue(target.checked ? target.value : '');
-            else setValue(target.value);
-          } else {
-            setValue(target.value);
-          }
-        };
+          // State -> DOM
+          bind(() => {
+            const value = getValue();
+            if (el instanceof HTMLInputElement) {
+              if (el.type === 'checkbox') el.checked = !!value;
+              else if (el.type === 'radio') el.checked = el.value === value;
+              else el.value = value ?? '';
+            } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+              el.value = value ?? '';
+            }
+          }, context);
 
-        el.addEventListener('input', updateState);
-        el.addEventListener('change', updateState);
-        
-        // Cleanup event listeners
-        cleanups.push(() => {
-          el.removeEventListener('input', updateState);
-          el.removeEventListener('change', updateState);
-        });
+          // DOM -> State
+          const updateState = (e: Event) => {
+            const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+            if (target instanceof HTMLInputElement) {
+              if (target.type === 'checkbox') setValue(target.checked);
+              else if (target.type === 'radio') setValue(target.checked ? target.value : '');
+              else setValue(target.value);
+            } else {
+              setValue(target.value);
+            }
+          };
+
+          el.addEventListener('input', updateState);
+          el.addEventListener('change', updateState);
+          
+          // Cleanup event listeners
+          cleanups.push(() => {
+            el.removeEventListener('input', updateState);
+            el.removeEventListener('change', updateState);
+          });
+        }
       }
 
       // Handle child components

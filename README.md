@@ -64,7 +64,7 @@ component<T, S>(
 )
 ```
 
-- `tag`: Custom element name (must contain a hyphen)
+- `tag`: Custom element name
 - `template`: HTML template string with reactive expressions
 - `stateFn`: Function returning initial state and methods
 - `style`: Optional CSS styles scoped to the component
@@ -135,14 +135,19 @@ With index:
 Two-way data binding for form inputs:
 
 ```html
+<!-- Individual binding -->
 <input bind="message" />
-<input type="checkbox" bind="agreed" />
-<select bind="selected">
-  <option value="a">A</option>
-  <option value="b">B</option>
-</select>
-<textarea bind="description"></textarea>
+
+<!-- Automatic form binding -->
+<form bind="user">
+  <input name="name" />
+  <input name="email" />
+  <input name="age" type="number" />
+  <input name="newsletter" type="checkbox" />
+</form>
 ```
+
+When `bind` is used on a container element (like `form`, `div`, etc.), it automatically binds to all child inputs with `name` attributes. Each input's `name` becomes a property path on the bound object.
 
 ### Attributes
 
