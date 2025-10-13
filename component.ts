@@ -925,7 +925,7 @@ export function component<S>(
           (stateProxy as any).mounted();
         }
       },
-      state: stateProxy,
+      state: stateProxy as S & { emit: (name: string, detail?: any) => void },
       unmount() {
         root.remove();
         
