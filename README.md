@@ -11,7 +11,7 @@ A minimal TypeScript UI framework with reactive state, component composition, an
 - **DOM Refs**: Direct access to DOM elements via `ref` attribute
 - **Lifecycle Methods**: `mounted` and `unmounted` hooks
 - **Custom Events**: Emit events from components with `this.emit()`
-- **Router**: Client-side routing with query parameter support
+- **Router**: Client-side routing with route parameters and query parameter support
 
 ## Installation
 
@@ -45,12 +45,25 @@ const counter = component(
   })
 );
 
+// Another component with route parameters
+const userProfile = component(
+  'user-profile',
+  `<h1>User Profile: {id}</h1>`,
+  (params) => ({
+    id: params.id
+  })
+);
+
 // Set up routing
 const routes = {
-  "/": counter
+  "/": counter,
+  "/user/:id": userProfile
 };
 
 router(document.body, routes);
+
+// Navigate to different routes
+go('/user/123'); // Route parameter: { id: "123" }
 ```
 
 ## Component API
@@ -225,17 +238,60 @@ import { router, go } from "@pvorselaars/minui";
 const routes = {
   "/": homeComponent,
   "/about": aboutComponent,
-  "/user": userComponent
+  "/user/:id": userComponent,
+  "/user/:userId/post/:postId": postComponent
 };
 
 router(document.body, routes);
 
 // Navigate programmatically
 go('/about');
-go('/user?id=123');
+go('/user/123');
+go('/user/alice/post/42?tab=comments');
 ```
 
-Route parameters are passed as query parameters to the component's state function.
+Route parameters and query parameters are merged and passed to the component's state function. Route parameters take precedence over query parameters with the same name.
+
+### Route Parameters
+
+Define dynamic routes using `:` prefix for parameters:
+
+```ts
+const userProfile = component(
+  'user-profile',
+  `<h1>User: {id}</h1><p>Name: {name}</p>`,
+  (params) => ({
+    id: params.id,
+    name: params.name || 'Anonymous'
+  })
+);
+
+const routes = {
+  "/user/:id": userProfile
+};
+
+// URL: /user/123 → params: { id: "123" }
+// URL: /user/123?name=Alice → params: { id: "123", name: "Alice" }
+```
+
+Multiple parameters and nested routes are supported:
+
+```ts
+const postView = component(
+  'post-view',
+  `<h1>Post {postId} by User {userId}</h1>`,
+  (params) => ({
+    userId: params.userId,
+    postId: params.postId
+  })
+);
+
+const routes = {
+  "/user/:userId/post/:postId": postView
+};
+
+// URL: /user/alice/post/42 → params: { userId: "alice", postId: "42" }
+```
 
 ## Component Composition
 
