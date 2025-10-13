@@ -451,14 +451,66 @@ export function component<S>(
 
       // Aggregate attribute expressions into a single binding
       if (attrExprs.length > 0) {
+        // Set up two-way binding for bind attributes
+        for (const { attr, expr } of attrExprs) {
+          if (attr === 'bind') {
+            const expression = expr;
+            const elInput = el as HTMLInputElement;
+            if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+              el.addEventListener('input', (e) => {
+                if ((e.target as HTMLInputElement).checked) {
+                  (stateProxy as any)[expression] = (e.target as HTMLInputElement).value;
+                }
+              });
+            } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+              el.addEventListener('input', (e) => {
+                (stateProxy as any)[expression] = (e.target as HTMLInputElement).checked;
+              });
+            } else {
+              el.addEventListener('input', (e) => {
+                (stateProxy as any)[expression] = (e.target as any).value;
+              });
+            }
+          }
+        }
+        
         bind(() => {
           for (const { attr, expr } of attrExprs) {
-            const result = evaluate(expr, context);
-            if (result !== undefined) {
-              if (booleanAttrs.has(attr)) {
-                el.toggleAttribute(attr, !!result);
+            if (attr === 'bind') {
+              const expression = expr;
+              const value = evaluate(expression, context);
+              const elInput = el as HTMLInputElement;
+              if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                elInput.checked = value === elInput.value;
+              } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                elInput.checked = !!value;
               } else {
-                el.setAttribute(attr, String(result));
+                (el as any).value = value;
+              }
+            } else {
+              let expression = expr;
+              const match = expr.match(/^\{(.*)\}$/);
+              if (match) {
+                expression = match[1].trim();
+              } else {
+                // For non-expression attributes, treat as literal
+                const result = evaluate(expression, context);
+                if (result !== undefined) {
+                  if (booleanAttrs.has(attr)) {
+                    el.toggleAttribute(attr, !!result);
+                  } else {
+                    el.setAttribute(attr, String(result));
+                  }
+                }
+                continue;
+              }
+              const result = evaluate(expression, context);
+              if (result !== undefined) {
+                if (booleanAttrs.has(attr)) {
+                  el.toggleAttribute(attr, !!result);
+                } else {
+                  el.setAttribute(attr, String(result));
+                }
               }
             }
           }
