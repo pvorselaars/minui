@@ -1,23 +1,54 @@
 import { go } from "./router";
-import { stores, subscribers } from "./store";
 
 const components: Record<string, (input?: any) => any> = {};
 const styles = new Set<string>();
+
+const __expr_cache__: Map<string, Function> = new Map();
+const __param_stmt_cache__: Map<string, Function> = new Map();
+
+function preprocessTemplate(template: string): string {
+  const result = template.replace(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)\/>/g, (match, tagName, attrs) => {
+    return `<${tagName}${attrs}></${tagName}>`;
+  });
+  return result;
+}
+
+function getExprFn(expr: string) {
+  let fn = __expr_cache__.get(expr);
+  if (!fn) {
+    fn = new Function("state", `with(state){ return ${expr} }`);
+    __expr_cache__.set(expr, fn);
+  }
+  return fn;
+}
+
+function getParamStmtFn(keys: string[], expr: string) {
+  const keySig = keys.join('|');
+  const cacheKey = `${keySig}::${expr}`;
+  let fn = __param_stmt_cache__.get(cacheKey);
+  if (!fn) {
+    fn = new Function(...keys, `with(this){ ${expr} }`);
+    __param_stmt_cache__.set(cacheKey, fn);
+  }
+  return fn;
+}
+
+export async function nextTick() {
+  await Promise.resolve();
+}
 
 function registerStyle(tag: string, style?: string) {
   if (style && !styles.has(tag)) {
     styles.add(tag);
     const styleEl = document.createElement('style');
     styleEl.textContent = style.replace(/(^|\})\s*([^{}]+)\s*\{/g, (_, brace, selector) => {
-      const parts = selector.split(","); 
-      const transformed = parts.map((s: any) => {
+      const parts = selector.split(",");
+      const transformed = parts.map((s: string) => {
         s = s.trim();
         if (s.startsWith(":host")) return s.replace(":host", tag);
         return `${tag} ${s}`;
       });
-      const indent = "      ";
-      const joined = transformed.join(",\n" + indent);
-      return `${brace}\n${indent}${joined} {`;
+      return `${brace}\n      ${transformed.join(",\n      ")} {`;
     });
     document.head.appendChild(styleEl);
   }
@@ -30,63 +61,31 @@ export function component<S>(
   style?: string
 ) {
   if (components[tag]) throw new Error(`Component '${tag}' already exists!`);
-
   registerStyle(tag, style);
+
+  const processedTemplate = preprocessTemplate(template.trim());
 
   const factory = function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
-    root.innerHTML = template.trim();
+    root.innerHTML = processedTemplate;
 
-    const bindings: Array<{ 
-      node: HTMLElement;
-      template: string;
-      dependencies: string[];
+    const bindings: Array<{
+      update: () => void;
+      deps: Set<string>;
     }> = [];
 
-    const conditionals: Array<{
-      placeholder: Comment;
-      template: Element;
-      expression: string;
-      dependencies: string[];
-      context: Record<string, any>;
-    }> = [];
+    const depMap: Map<string, number[]> = new Map();
+    const bindingRegistry: Map<number, { update: () => void; deps: Set<string> }> = new Map();
+    let bindingIdCounter = 0;
 
-    const loops: Array<{
-      placeholder: Comment;
-      template: Element;
-      itemVar: string;
-      indexVar: string | null;
-      arrayExpr: string;
-      dependencies: string[];
-      renderedNodes: Node[];
-    }> = [];
+    const pendingArrayOps: Map<string, { op: string; args: any[] }> = new Map();
 
-    const conditionalVisibilty: Array<{
-      node: HTMLElement;
-      expression: string;
-      dependencies: string[];
-      style: string;
-    }> = [];
+    const cleanups: Array<() => void> = [];
 
-    const attributeBindings: Array<{
-      element: HTMLElement;
-      attribute: string;
-      expression: string;
-      dependencies: string[];
-      context: Record<string, any>;
-    }> = [];
-
-    const childComponents: Array<{
-      instance: any;
-      bindings: Array<{
-        inputKey: string;
-        stateKey: string;
-        dependencies: string[];
-      }>;
-    }> = [];
+    let updateScheduled = false;
+    const pendingKeys = new Set<string>();
 
     const resolvedState = state(input);
-
     const fullState = Object.create(
       Object.getPrototypeOf(resolvedState || {}),
       {
@@ -96,219 +95,37 @@ export function component<S>(
       }
     );
 
-    const computedProperties = new Map<string, {
-      getter: () => any;
-      dependencies: Set<string>;
-    }>();
+    let tracking: Set<string> | null = null;
 
-    const descriptors = Object.getOwnPropertyDescriptors(fullState);
-
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (descriptor.get) {
-        computedProperties.set(key, {
-          getter: descriptor.get,
-          dependencies: new Set()
-        });
+    const computeds = new Map<string, { getter: () => any; deps: Set<string> }>();
+    for (const [key, desc] of Object.entries(Object.getOwnPropertyDescriptors(fullState))) {
+      if (desc.get) {
+        computeds.set(key, { getter: desc.get, deps: new Set() });
       }
     }
 
-    const usedStoreKeys = new Map<any, Set<string>>();
-    const stateStores = new Map<string, any>();
-    Object.entries(fullState).forEach(([key, value]) => {
-      if (value && typeof value === 'object' && stores.has(value)) {
-        stateStores.set(key, value);
-      }
-    });
+    const stateProxy = createProxy(fullState, []);
 
-    function createDeepProxy(obj: any, path: string[] = []): any {
-      if (obj === null || typeof obj !== 'object') {
-        return obj;
-      }
-
-      if (obj.__proxy) {
-        return obj;
-      }
-
-      if (Array.isArray(obj)) {
-        const arrayProxy = new Proxy(obj, {
-          get(target: any, key: string | symbol): any {
-            if (key === '__proxy') {
-              return true;
-            }
-
-            if (currentlyTracking && typeof key === 'string' && key !== 'emit' && key !== '__proxy') {
-              const rootKey = path.length > 0 ? path[0] : key.toString();
-              currentlyTracking.add(rootKey);
-            }
-
-            const value = target[key];
-
-            if (typeof value === 'function' && ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse'].includes(key as string)) {
-              return function(this: any, ...args: any[]) {
-                const result = value.apply(this, args);
-                
-                const rootKey = path.length > 0 ? path[0] : 'length';
-                updateKey(rootKey);
-                
-                return result;
-              };
-            }
-
-            if (typeof value === 'object' && value !== null) {
-              return createDeepProxy(value, [...path, key.toString()]);
-            }
-            return value;
-          },
-          set(target: any, key: string | symbol, value: any): boolean {
-            const isAlreadyProxy = value && typeof value === 'object' && value.__proxy;
-            
-            if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof RegExp) && !isAlreadyProxy) {
-              target[key] = value;
-
-              const newPath = [...path, key.toString()];
-              Object.defineProperty(target, key, {
-                value: createDeepProxy(value, newPath),
-                writable: true,
-                enumerable: true,
-                configurable: true
-              });
-            } else {
-              target[key] = value;
-            }
-            
-            const rootKey = path.length > 0 ? path[0] : key.toString();
-            const fullPath = [...path, key.toString()].join('.');
-            
-            if (stores.has(target)) {
-              const subscribersMap = subscribers.get(target);
-              if (subscribersMap && typeof key === 'string') {
-                const keySubscribers = subscribersMap.get(key);
-                if (keySubscribers) {
-                  keySubscribers.forEach(callback => callback());
-                }
-              }
-            }
-            
-            updateKey(rootKey);
-            
-            if (fullPath !== rootKey) {
-              updateKey(fullPath);
-            }
-            
-            for (let i = 1; i < path.length; i++) {
-              const intermediatePath = path.slice(0, i + 1).join('.');
-              updateKey(intermediatePath);
-            }
-
-            
-            return true;
-          }
-        });
-
-        return arrayProxy;
-      }
-
-      const proxy = new Proxy(obj, {
-        get(target: any, key: string | symbol): any {
-          if (key === '__proxy') {
-            return true;
-          }
-          
-          // Track property access for computed dependencies
-          if (currentlyTracking && typeof key === 'string' && key !== 'emit' && key !== '__proxy') {
-            const rootKey = path.length > 0 ? path[0] : key.toString();
-            currentlyTracking.add(rootKey);
-          }
-          
-          const value = target[key];
-          if (typeof value === 'object' && value !== null && key !== 'emit') {
-            return createDeepProxy(value, [...path, key.toString()]);
-          }
-          return value;
-        },
-        set(target: any, key: string | symbol, value: any): boolean {
-          const isAlreadyProxy = value && typeof value === 'object' && value.__isMinuiProx;
-          
-          if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof RegExp) && !isAlreadyProxy) {
-            target[key] = value;
-
-            const newPath = [...path, key.toString()];
-            Object.defineProperty(target, key, {
-              value: createDeepProxy(value, newPath),
-              writable: true,
-              enumerable: true,
-              configurable: true
-            });
-          } else {
-            target[key] = value;
-          }
-          
-          const rootKey = path.length > 0 ? path[0] : key.toString();
-          const fullPath = [...path, key.toString()].join('.');
-          
-          if (stores.has(target)) {
-            const subscribersMap = subscribers.get(target);
-            if (subscribersMap && typeof key === 'string') {
-              const keySubscribers = subscribersMap.get(key);
-              if (keySubscribers) {
-                keySubscribers.forEach(callback => callback());
-              }
-            }
-          }
-          
-          updateKey(rootKey);
-          
-          if (fullPath !== rootKey) {
-            updateKey(fullPath);
-          }
-          
-          for (let i = 1; i < path.length; i++) {
-            const intermediatePath = path.slice(0, i + 1).join('.');
-            updateKey(intermediatePath);
-          }
-
-          if (value && typeof value === 'object') {
-            function triggerNested(obj: any, parentPath: string) {
-              for (const k in obj) {
-                const nestedPath = parentPath + '.' + k;
-                updateKey(nestedPath);
-                if (typeof obj[k] === 'object' && obj[k] !== null) {
-                  triggerNested(obj[k], nestedPath);
-                }
-              }
-            }
-            triggerNested(value, fullPath);
-          }
-          
-          return true;
-        }
-      });
-
-      return proxy;
-    }
-
-    const stateProxy = createDeepProxy(fullState, []);
-
-    let currentlyTracking: Set<string> | null = null;
-
-    computedProperties.forEach((computed, key) => {
-      currentlyTracking = new Set();
+    computeds.forEach((computed, key) => {
+      const prev = tracking;
+      tracking = new Set();
       try {
         computed.getter.call(stateProxy);
-      } catch (e) {
-      }
-      computed.dependencies = currentlyTracking;
-      currentlyTracking = null;
+        computed.deps = tracking;
+      } catch (e) {}
+      tracking = prev;
 
       Object.defineProperty(stateProxy, key, {
         get() {
-          const previousTracking = currentlyTracking;
-          currentlyTracking = new Set();
+          if (tracking) {
+            tracking.add(key);
+          }
           
+          const prevTracking = tracking;
+          tracking = new Set();
           const result = computed.getter.call(stateProxy);
-          
-          computed.dependencies = currentlyTracking;
-          currentlyTracking = previousTracking;
+          computed.deps = tracking;
+          tracking = prevTracking;
           
           return result;
         },
@@ -317,581 +134,893 @@ export function component<S>(
       });
     });
 
-    Object.defineProperty(stateProxy, 'getByPath', {
-      value: (pathString: string) => {
-        return pathString.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
-      },
-      enumerable: false,
-      writable: false
-    });
+    function createProxy(obj: any, path: string[], depth = 0): any {
+      if (obj === null || typeof obj !== 'object') return obj;
+      if (obj.__proxy) return obj;
+      if (depth > 2) return obj;
 
-    Object.defineProperty(stateProxy, 'setByPath', {
-      value: (pathString: string, value: any) => {
-        const keys = pathString.split('.');
-        const lastKey = keys.pop()!;
-        const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
-        if (parent && typeof parent === 'object') {
-          parent[lastKey] = value;
+      const handler: ProxyHandler<any> = {
+        get(target, key: string | symbol) {
+          if (key === '__proxy') return true;
+          
+          if (tracking && typeof key === 'string' && key !== 'emit') {
+            const rootKey = path.length > 0 ? path[0] : key;
+            tracking.add(rootKey);
+          }
+
+          const value = target[key];
+
+          if (Array.isArray(target) && typeof value === 'function' && 
+              ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse'].includes(key as string)) {
+            return function(...args: any[]) {
+              const result = value.apply(target, args);
+              const rootKey = path.length > 0 ? path[0] : 'length';
+              try {
+                pendingArrayOps.set(rootKey, { op: key.toString(), args });
+              } catch {}
+              notify(rootKey);
+              return result;
+            };
+          }
+
+          if (typeof value === 'object' && value !== null) {
+            return createProxy(value, [...path, key.toString()], depth + 1);
+          }
+
+          return value;
+        },
+
+        set(target, key: string | symbol, value: any) {
+          if (target[key] === value) return true;
+
+          const isAlreadyProxy = value?.__proxy;
+          const rootKey = path.length > 0 ? path[0] : key.toString();
+
+          if (value && typeof value === 'object' && !isAlreadyProxy && 
+              !(value instanceof Date) && !(value instanceof RegExp)) {
+            target[key] = createProxy(value, [...path, key.toString()], depth + 1);
+          } else {
+            target[key] = value;
+          }
+
+          notify(rootKey);
+
           return true;
         }
-        return false;
-      },
-      enumerable: false,
-      writable: false
-    });
+      };
 
-    function toNodeArray(x: Node | Node[] | NodeList): Node[] {
-      if (x instanceof Node) return [x];
-      if (x instanceof NodeList) return Array.from(x);
-      if (Array.isArray(x)) return x.flatMap(toNodeArray);
-      return [];
+      return new Proxy(obj, handler);
     }
 
-    function evaluateExpression(expr: string, context: Record<string, any> = {}): any {
+    function track<T>(fn: () => T, context: Record<string, any> = {}): [T, Set<string>] {
+      const deps = new Set<string>();
+      const prev = tracking;
+      tracking = deps;
+      
       try {
-        const scope = new Proxy({ ...stateProxy, ...context }, {
-          get(target, key: string) {
-            return key in target ? (target as any)[key] : undefined;
-          }
-        });
+        const result = fn();
+        return [result, deps];
+      } finally {
+        tracking = prev;
+      }
+    }
 
-        return new Function("state", `with(state) { return ${expr} }`)(scope);
+    function evaluate(expr: string, context: Record<string, any> = {}): any {
+      try {
+        if (Object.keys(context).length === 0) {
+          const fn = getExprFn(expr);
+          return fn(stateProxy);
+        } else {
+          const ctx: Record<string, any> = Object.assign({}, context);
+          const scope = new Proxy(ctx, {
+            has(target, prop) {
+              return prop in target || prop in stateProxy;
+            },
+            get(target, prop, receiver) {
+              if (prop in target) return (target as any)[prop];
+              return (stateProxy as any)[prop as any];
+            },
+            ownKeys(target) {
+              return Reflect.ownKeys(target);
+            },
+            getOwnPropertyDescriptor(target, prop) {
+              const desc = Object.getOwnPropertyDescriptor(target, prop as any);
+              if (desc) return desc;
+              return undefined;
+            }
+          });
+          const fn = getExprFn(expr);
+          return fn(scope);
+        }
       } catch {
         return undefined;
       }
     }
 
-    function extractDependencies(expr: string, loopContext: Record<string, any> = {}): string[] {
-      const deps = new Set<string>();
-
-      const stateKeys = Object.keys(stateProxy);
-      const loopKeys = Object.keys(loopContext);
-
-      const cleanExpr = expr.replace(/\?\./g, '.');
-
-      for (const key of stateKeys) {
-        const regex = new RegExp(`\\b${key}(?:\\.(\\w+(?:\\.\\w+)*))?\\b`, 'g');
-        let match;
-        while ((match = regex.exec(cleanExpr)) !== null) {
-          const propertyPath = match[1];
-          if (propertyPath) {
-            deps.add(`${key}.${propertyPath}`);
-          } else {
-            deps.add(key);
-          }
-        }
+    function notify(key: string) {
+      pendingKeys.add(key);
+      
+      if (!updateScheduled) {
+        updateScheduled = true;
+        queueMicrotask(() => {
+          flushUpdates();
+        });
       }
-
-      for (const key of loopKeys) {
-        const regex = new RegExp(`\\b${key}(?:\\.(\\w+(?:\\.\\w+)*))?\\b`, 'g');
-        let match;
-        while ((match = regex.exec(cleanExpr)) !== null) {
-          const propertyPath = match[1];
-          if (propertyPath) {
-            deps.add(`${key}.${propertyPath}`);
-          } else {
-            deps.add(key);
-          }
-        }
-      }
-
-      return Array.from(deps);
     }
 
-    function walk(node: Node, loopContext: Record<string, any> = {}) {
+    function flushUpdates() {
+      if (pendingKeys.size === 0) return;
+
+      const keys = Array.from(pendingKeys);
+      pendingKeys.clear();
+      updateScheduled = false;
+
+      const updatedBindings = new Set<number>();
+
+      for (const k of keys) {
+
+        const set = depMap.get(k);
+        if (set) {
+          const listIds = Array.from(set);
+          for (const id of listIds) {
+            const binding = bindingRegistry.get(id);
+            if (!binding) continue; // was removed
+            if (!updatedBindings.has(id)) {
+              updatedBindings.add(id);
+              binding.update();
+            }
+          }
+        }
+
+        computeds.forEach((computed, computedKey) => {
+          if (computed.deps.has(k)) {
+            pendingKeys.add(computedKey);
+          }
+        });
+      }
+
+      if (pendingKeys.size > 0) {
+        flushUpdates();
+      }
+
+      pendingArrayOps.clear();
+    }
+
+    function bind(updateFn: () => void, context: Record<string, any> = {}): () => void {
+      const deps = new Set<string>();
+      const prev = tracking;
+      tracking = deps;
+      try {
+        updateFn();
+      } catch (e) {}
+      tracking = prev;
+
+      const binding = { update: updateFn, deps };
+      bindings.push(binding);
+
+      const id = ++bindingIdCounter;
+      bindingRegistry.set(id, binding);
+
+      for (const d of deps) {
+        let arr = depMap.get(d);
+        if (!arr) {
+          arr = [];
+          depMap.set(d, arr);
+        }
+        arr.push(id);
+      }
+
+      const cleanup = () => {
+        const idx = bindings.indexOf(binding);
+        if (idx > -1) bindings.splice(idx, 1);
+
+        for (const d of deps) {
+          const arr = depMap.get(d);
+          if (arr) {
+            const p = arr.indexOf(id);
+            if (p > -1) arr.splice(p, 1);
+            if (arr.length === 0) depMap.delete(d);
+          }
+        }
+
+        bindingRegistry.delete(id);
+      };
+
+      cleanups.push(cleanup);
+      return cleanup;
+    }
+
+    function collectDynamicParts(root: Element) {
+      const parts: Array<any> = [];
+
+      function walkText(n: Node) {
+        if (n.nodeType === (Node as any).ELEMENT_NODE) {
+          const el = n as Element;
+          if (el.hasAttribute('for') || el.hasAttribute('if')) return;
+          const childTag = el.tagName.toLowerCase();
+          if (components[childTag] && childTag !== tag) return;
+        }
+
+        if (n.nodeType === (Node as any).TEXT_NODE) {
+          const text = n.textContent || '';
+          if (text.includes('{')) {
+            const matches = text.match(/\{(.*?)\}/g);
+            if (matches) parts.push({ type: 'text', node: n as Text, template: text, matches });
+          }
+        }
+
+        Array.from(n.childNodes).forEach(child => walkText(child));
+      }
+
+      walkText(root as unknown as Node);
+
+      const elems = root.querySelectorAll('*');
+      elems.forEach(el => {
+        el.getAttributeNames().forEach(attr => {
+          if (attr === 'if' || attr === 'for' || attr === 'bind' || attr.startsWith('on:')) return;
+          const raw = el.getAttribute(attr);
+          if (raw != null) {
+            parts.push({ type: 'attr', node: el as HTMLElement, attr, expr: raw });
+          }
+        });
+      });
+
+      return parts;
+    }
+
+    function processEvents(el: HTMLElement, context: Record<string, any>) {
+      el.getAttributeNames().forEach(attr => {
+        if (!attr.startsWith('on:')) return;
+        const eventName = attr.slice(3);
+        const expr = el.getAttribute(attr)?.trim();
+        if (!expr) return;
+        const capturedContext = { ...context };
+        const paramKeys = [...Object.keys(capturedContext), 'event'];
+
+        const handler = (e: Event) => {
+          try {
+            const values = [
+              ...Object.values(capturedContext).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
+              e
+            ];
+            const fn = getParamStmtFn(paramKeys, expr);
+            fn.call(stateProxy, ...values);
+            try { flushUpdates(); } catch {}
+          } catch (err) {
+            console.error(`Error in event handler "${expr}":`, err);
+            console.error('Available context keys:', paramKeys);
+          }
+        };
+
+        el.addEventListener(eventName, handler);
+
+        cleanups.push(() => {
+          el.removeEventListener(eventName, handler);
+        });
+
+        el.removeAttribute(attr);
+      });
+    }
+
+    function processAttributes(el: HTMLElement, context: Record<string, any>) {
+      const attrExprs: Array<{ attr: string; expr: string }> = [];
+      const booleanAttrs = new Set(['disabled', 'readonly', 'checked', 'selected']);
+
+      el.getAttributeNames().forEach(attr => {
+        const raw = el.getAttribute(attr);
+        if (raw == null) return;
+        attrExprs.push({ attr, expr: raw });
+      });
+
+      if (attrExprs.length > 0) {
+        for (const { attr, expr } of attrExprs) {
+          if (attr === 'bind') {
+            let expression = expr;
+            
+            const formInputs = el.querySelectorAll('input[name], select[name], textarea[name]');
+            if (formInputs.length > 0) {
+              formInputs.forEach((input: Element) => {
+                const inputName = input.getAttribute('name');
+                if (inputName && !input.hasAttribute('bind')) {
+                  input.setAttribute('bind', `${expression}.${inputName}`);
+                }
+              });
+            } else {
+              const elInput = el as HTMLInputElement;
+              if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                el.addEventListener('input', (e) => {
+                  if ((e.target as HTMLInputElement).checked) {
+                    (stateProxy as any)[expression] = (e.target as HTMLInputElement).value;
+                  }
+                });
+              } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                el.addEventListener('input', (e) => {
+                  (stateProxy as any)[expression] = (e.target as HTMLInputElement).checked;
+                });
+              } else {
+                el.addEventListener('input', (e) => {
+                  (stateProxy as any)[expression] = (e.target as any).value;
+                });
+              }
+              
+              bind(() => {
+                const value = evaluate(expression, context);
+                if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                  elInput.checked = value === elInput.value;
+                } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                  elInput.checked = !!value;
+                } else {
+                  (el as any).value = value;
+                }
+              }, context);
+            }
+          }
+        }
+        
+        if (!attrExprs.some(({ attr }) => attr === 'bind') && el.hasAttribute('name')) {
+          const parentBind = el.parentElement?.getAttribute('bind');
+          if (parentBind) {
+            const expression = `${parentBind}.${el.getAttribute('name')}`;
+            const elInput = el as HTMLInputElement;
+            
+            if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+              el.addEventListener('input', (e) => {
+                if ((e.target as HTMLInputElement).checked) {
+                  (stateProxy as any)[expression] = (e.target as HTMLInputElement).value;
+                }
+              });
+            } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+              el.addEventListener('input', (e) => {
+                (stateProxy as any)[expression] = (e.target as HTMLInputElement).checked;
+              });
+            } else {
+              el.addEventListener('input', (e) => {
+                (stateProxy as any)[expression] = (e.target as any).value;
+              });
+            }
+            
+            bind(() => {
+              const value = evaluate(expression, context);
+              if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                elInput.checked = value === elInput.value;
+              } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                elInput.checked = !!value;
+              } else {
+                (el as any).value = value;
+              }
+            }, context);
+          }
+        }
+        
+        bind(() => {
+          for (const { attr, expr } of attrExprs) {
+            if (attr === 'bind') {
+              const expression = expr;
+              const value = evaluate(expression, context);
+              const elInput = el as HTMLInputElement;
+              if (el.tagName === 'INPUT' && elInput.type === 'radio') {
+                elInput.checked = value === elInput.value;
+              } else if (el.tagName === 'INPUT' && elInput.type === 'checkbox') {
+                elInput.checked = !!value;
+              } else {
+                (el as any).value = value;
+              }
+            } else {
+              let expression = expr;
+              const match = expr.match(/^\{(.*)\}$/);
+              if (match) {
+                expression = match[1].trim();
+              } else {
+                const result = evaluate(expression, context);
+                if (result !== undefined) {
+                  if (booleanAttrs.has(attr)) {
+                    el.toggleAttribute(attr, !!result);
+                  } else {
+                    el.setAttribute(attr, String(result));
+                  }
+                }
+                continue;
+              }
+              const result = evaluate(expression, context);
+              if (result !== undefined) {
+                if (booleanAttrs.has(attr)) {
+                  el.toggleAttribute(attr, !!result);
+                } else {
+                  el.setAttribute(attr, String(result));
+                }
+              }
+            }
+          }
+        }, context);
+      }
+    }
+
+    function walk(node: Node, context: Record<string, any> = {}) {
       if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent || '';
         const matches = text.match(/\{(.*?)\}/g);
-        if (!matches) return;
-
-        let result = text;
-        for (const match of matches) {
-          const key = match.slice(1, -1).trim();
-          const cleanKey = key.replace(/\?\./g, '.');
-          const rootVar = cleanKey.split(/[.\[\(]/)[0];
-
-          const store = stateStores.get(rootVar);
-          if (store) {
-            const storeAccessPattern = new RegExp(`\\b${rootVar}\\.(\\w+)`, 'g');
-            let match = storeAccessPattern.exec(cleanKey);
-            if (match !== null) {
-              if (!usedStoreKeys.has(store)) {
-                usedStoreKeys.set(store, new Set());
-              }
-              usedStoreKeys.get(store)!.add(match[1]);
-              bindings.push({node: node as HTMLElement, template: text, dependencies: [match[1]]});
+        if (matches) {
+          const template = text;
+          bind(() => {
+            let result = template;
+            for (const match of matches) {
+              const expr = match.slice(1, -1).trim();
+              const value = evaluate(expr, context);
+              result = result.replace(match, String(value ?? ''));
             }
-          } else if (rootVar in stateProxy && !(rootVar in loopContext)) {
-            const deps = computedProperties.has(rootVar) ? [rootVar] : [key];
-            bindings.push({node: node as HTMLElement, template: text, dependencies: deps});
-          }
+            (node as Text).data = result;
+          }, context);
+        }
+        return;
+      }
 
-          const value = evaluateExpression(key, loopContext);
-          result = result.replace(match, String(value ?? ''));
-          (node as Text).data = result;
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const el = node as HTMLElement;
+
+      if (el.hasAttribute('if')) {
+        const expr = el.getAttribute('if')!.trim();
+        const placeholder = document.createComment(`if:${expr}`);
+        const template = el.cloneNode(true) as Element;
+        template.removeAttribute('if');
+        
+        el.parentNode?.insertBefore(placeholder, el);
+        el.remove();
+
+        let rendered: Element | null = null;
+
+        bind(() => {
+          const shouldShow = !!evaluate(expr, context);
+          if (shouldShow && !rendered) {
+            rendered = template.cloneNode(true) as Element;
+            placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
+            walk(rendered, context);
+            const next = placeholder.nextSibling as Element | null;
+            if (next && next.nodeType === Node.ELEMENT_NODE) {
+              rendered = next as Element;
+            }
+          } else if (!shouldShow && rendered) {
+            rendered.remove();
+            rendered = null;
+          }
+        }, context);
+
+        return;
+      }
+
+      if (el.hasAttribute('for')) {
+        const forExpr = el.getAttribute('for')!.trim();
+        const match = forExpr.match(/^(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)$/);
+        
+        if (match) {
+          const [, itemVar, indexVar, arrayExpr] = match;
+          const placeholder = document.createComment(`for:${forExpr}`);
+          const template = el.cloneNode(true) as Element;
+          const selectedBy = el.getAttribute('selected-by');
+          template.removeAttribute('for');
+          template.removeAttribute('selected-by');
+          
+          el.parentNode?.insertBefore(placeholder, el);
+          el.remove();
+
+          let rendered: Node[] = [];
+
+          bind(() => {
+            const array = evaluate(arrayExpr, context);
+            if (!Array.isArray(array)) return;
+
+            const rootKey = (arrayExpr.split('.')[0]) as string;
+            const opInfo = pendingArrayOps.get(rootKey);
+
+            const tryIncremental = () => {
+              if (!opInfo) return false;
+              const op = opInfo.op;
+
+              if (op === 'push') {
+                const parent = placeholder.parentNode!;
+                for (let a = 0; a < opInfo.args.length; a++) {
+                  const i = array.length - opInfo.args.length + a;
+                  const itemContext = { ...context, [itemVar]: array[i], ...(indexVar ? { [indexVar]: i } : {}) };
+                  const clone = template.cloneNode(true) as Element;
+                  const parts = collectDynamicParts(clone as Element);
+                  if (parts.length > 0) {
+                    const updateItem = () => {
+                      for (const p of parts) {
+                        if (p.type === 'text') {
+                          let result = p.template;
+                          for (const match of p.matches) {
+                            const expr = match.slice(1, -1).trim();
+                            const value = evaluate(expr, itemContext);
+                            result = result.replace(match, String(value ?? ''));
+                          }
+                          (p.node as Text).data = result;
+                        } else if (p.type === 'attr') {
+                          const res = evaluate(p.expr, itemContext);
+                          if (res !== undefined) {
+                            const booleanAttrs = new Set(['disabled', 'readonly', 'checked', 'selected']);
+                            if (booleanAttrs.has(p.attr)) {
+                              (p.node as HTMLElement).toggleAttribute(p.attr, !!res);
+                            } else {
+                              (p.node as HTMLElement).setAttribute(p.attr, String(res));
+                            }
+                          }
+                        }
+                      }
+                    };
+                    bind(updateItem, itemContext);
+                    processEvents(clone as HTMLElement, itemContext);
+                    Array.from((clone as Element).childNodes).forEach(child => walk(child, itemContext));
+                  } else {
+                    processEvents(clone as HTMLElement, itemContext);
+                    walk(clone, itemContext);
+                  }
+                  if (rendered.length > 0) {
+                    const last = rendered[rendered.length - 1];
+                    last.parentNode?.insertBefore(clone, (last as Node).nextSibling);
+                  } else {
+                    parent.insertBefore(clone, placeholder.nextSibling);
+                  }
+
+                  if (selectedBy && indexVar) {
+                    const stateKey = selectedBy.trim();
+                    try {
+                      bind(() => {
+                        try {
+                          const cur = (stateProxy as any)[stateKey];
+                          const curIdx = cur != null ? Number(cur) : null;
+                          if (curIdx === i) {
+                            (clone as HTMLElement).className = 'selected';
+                          } else {
+                            (clone as HTMLElement).className = '';
+                          }
+                        } catch {}
+                      }, itemContext);
+                    } catch {}
+                  }
+
+                  rendered.push(clone);
+                }
+                return true;
+              }
+
+              if (op === 'pop') {
+                const last = rendered.pop();
+                if (last) {
+                  const hn = last as any as HTMLElement;
+                  hn.remove();
+                }
+                return true;
+              }
+
+              return false;
+            };
+
+            if (!tryIncremental()) {
+              for (const n of rendered) {
+                const hn = n as any as HTMLElement;
+                hn.remove();
+              }
+              rendered = [];
+
+              const fragment = document.createDocumentFragment();
+              for (let i = 0; i < array.length; i++) {
+                const itemContext = { 
+                  ...context, 
+                  [itemVar]: array[i],
+                  ...(indexVar ? { [indexVar]: i } : {})
+                };
+                const clone = template.cloneNode(true) as Element;
+
+                const parts = collectDynamicParts(clone as Element);
+                if (parts.length > 0) {
+                  const updateItem = () => {
+                    for (const p of parts) {
+                      if (p.type === 'text') {
+                        let result = p.template;
+                        for (const match of p.matches) {
+                          const expr = match.slice(1, -1).trim();
+                          const value = evaluate(expr, itemContext);
+                          result = result.replace(match, String(value ?? ''));
+                        }
+                        (p.node as Text).data = result;
+                      } else if (p.type === 'attr') {
+                        const res = evaluate(p.expr, itemContext);
+                        if (res !== undefined) {
+                          const booleanAttrs = new Set(['disabled', 'readonly', 'checked', 'selected']);
+                          if (booleanAttrs.has(p.attr)) {
+                            (p.node as HTMLElement).toggleAttribute(p.attr, !!res);
+                          } else {
+                            (p.node as HTMLElement).setAttribute(p.attr, String(res));
+                          }
+                        }
+                      }
+                    }
+                  };
+
+                  bind(updateItem, itemContext);
+                  Array.from((clone as Element).childNodes).forEach(child => walk(child, itemContext));
+                  processEvents(clone as HTMLElement, itemContext);
+                  if (selectedBy && indexVar) {
+                    const stateKey = selectedBy.trim();
+                    bind(() => {
+                      try {
+                        const cur = (stateProxy as any)[stateKey];
+                        const curIdx = cur != null ? Number(cur) : null;
+                        if (curIdx === i) {
+                          (clone as HTMLElement).className = 'selected';
+                        } else {
+                          (clone as HTMLElement).className = '';
+                        }
+                      } catch {}
+                    }, itemContext);
+                  }
+                } else {
+                  walk(clone, itemContext);
+                  processEvents(clone as HTMLElement, itemContext);
+                  if (selectedBy && indexVar) {
+                    const stateKey = selectedBy.trim();
+                    bind(() => {
+                      try {
+                        const cur = (stateProxy as any)[stateKey];
+                        const curIdx = cur != null ? Number(cur) : null;
+                        if (curIdx === i) {
+                          (clone as HTMLElement).className = 'selected';
+                        } else {
+                          (clone as HTMLElement).className = '';
+                        }
+                      } catch {}
+                    }, itemContext);
+                  }
+                }
+
+                fragment.appendChild(clone);
+                rendered.push(clone);
+              }
+
+              placeholder.parentNode?.insertBefore(fragment, placeholder.nextSibling);
+            }
+          }, context);
+
+          return;
         }
       }
 
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-
-        if (el.hasAttribute('if')) {
-          const expression = el.getAttribute('if')!.trim();
-          const shouldRender = !!evaluateExpression(expression, loopContext);
-          
-          const placeholder = document.createComment(`if:${expression}`);
-          el.parentNode?.insertBefore(placeholder, el);
-          
-          const templateClone = el.cloneNode(true) as Element;
-          templateClone.removeAttribute('if');
-          
-          conditionals.push({
-            placeholder,
-            template: templateClone,
-            expression,
-            dependencies: extractDependencies(expression),
-            context: loopContext
-          });
-          
-          if (el.parentNode) {
-            el.parentNode.removeChild(el);
+      if (el.hasAttribute('show')) {
+        const expr = el.getAttribute('show')!.trim();
+        el.removeAttribute('show');
+        
+        let originalDisplay = '';
+        bind(() => {
+          const shouldShow = !!evaluate(expr, context);
+          if (shouldShow && el.style.display === 'none') {
+            el.style.display = originalDisplay;
+          } else if (!shouldShow && el.style.display !== 'none') {
+            originalDisplay = el.style.display;
+            el.style.display = 'none';
           }
-          
-          if (shouldRender) {
-            const rendered = templateClone.cloneNode(true) as Element;
-            placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
-            walk(rendered, loopContext);
-          }
-          
-          return;
-        }
+        }, context);
+      }
 
-        if (el.hasAttribute('for')) {
-          const forExpr = el.getAttribute('for')!.trim();
-          const match = forExpr.match(/^(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)$/);
-          
-          if (match) {
-            const itemVar = match[1];
-            const indexVar = match[2] || null;
-            const arrayExpr = match[3];
-            
-            const placeholder = document.createComment(`for:${forExpr}`);
-            el.parentNode?.insertBefore(placeholder, el);
-            
-            const templateClone = el.cloneNode(true) as Element;
-            templateClone.removeAttribute('for');
-            
-            const loopData = {
-              placeholder,
-              template: templateClone,
-              itemVar,
-              indexVar,
-              arrayExpr,
-              dependencies: extractDependencies(arrayExpr),
-              renderedNodes: [] as Node[]
-            };
-            
-            loops.push(loopData);
-            el.remove();
-            
-            renderLoop(loopData, loopContext);
-            return;
-          }
-        }
+      if (el.hasAttribute('bind')) {
+        const key = el.getAttribute('bind')!.trim();
+        el.removeAttribute('bind');
 
-        if (el.hasAttribute("show")) {
-          const expression = el.getAttribute('show')!.trim();
-          conditionalVisibilty.push({
-            node: el,
-            expression,
-            dependencies: extractDependencies(expression),
-            style: ''
-          });
-          el.removeAttribute("show");
-        }
+        const formInputs = el.querySelectorAll('input[name], select[name], textarea[name]');
+        if (formInputs.length > 0) {
+          formInputs.forEach((input: Element) => {
+            const inputEl = input as HTMLElement;
+            const inputName = input.getAttribute('name');
+            if (inputName) {
+              const inputKey = `${key}.${inputName}`;
+              const getValue = () => inputKey.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
+              const setValue = (val: any) => {
+                const keys = inputKey.split('.');
+                const last = keys.pop()!;
+                const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
+                if (parent) parent[last] = val;
+              };
 
-        if (el.hasAttribute("bind")) {
-          const key = el.getAttribute('bind')!.trim();
-          const val = stateProxy.getByPath(key);
-          if (el instanceof HTMLInputElement) {
-            if (el.type === 'checkbox') {
-              el.checked = !!val;
-            } else if (el.type === 'radio') {
-              el.checked = el.value === val;
-            } else {
-              el.value = val ?? '';
+              const initialValue = getValue();
+              if (inputEl instanceof HTMLInputElement) {
+                if (inputEl.type === 'checkbox') inputEl.checked = !!initialValue;
+                else if (inputEl.type === 'radio') inputEl.checked = inputEl.value === initialValue;
+                else inputEl.value = initialValue ?? '';
+              } else if (inputEl instanceof HTMLSelectElement || inputEl instanceof HTMLTextAreaElement) {
+                inputEl.value = initialValue ?? '';
+              }
+
+              bind(() => {
+                const value = getValue();
+                if (inputEl instanceof HTMLInputElement) {
+                  if (inputEl.type === 'checkbox') inputEl.checked = !!value;
+                  else if (inputEl.type === 'radio') inputEl.checked = inputEl.value === value;
+                  else inputEl.value = value ?? '';
+                } else if (inputEl instanceof HTMLSelectElement || inputEl instanceof HTMLTextAreaElement) {
+                  inputEl.value = value ?? '';
+                }
+              }, context);
+
+              const updateState = (e: Event) => {
+                const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+                if (target instanceof HTMLInputElement) {
+                  if (target.type === 'checkbox') setValue(target.checked);
+                  else if (target.type === 'radio') setValue(target.checked ? target.value : '');
+                  else setValue(target.value);
+                }
+              };
+
+              inputEl.addEventListener('input', updateState);
+              inputEl.addEventListener('change', updateState);
+              
+              cleanups.push(() => {
+                inputEl.removeEventListener('input', updateState);
+                inputEl.removeEventListener('change', updateState);
+              });
             }
-          } else if (el instanceof HTMLSelectElement) {
-            el.value = val ?? '';
-          } else if (el instanceof HTMLTextAreaElement) {
-            el.value = val ?? '';
+          });
+        } else {
+          const getValue = () => key.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
+          const setValue = (val: any) => {
+            const keys = key.split('.');
+            const last = keys.pop()!;
+            const parent = keys.reduce((acc: any, k) => acc?.[k], stateProxy);
+            if (parent) parent[last] = val;
+          };
+
+          const initialValue = getValue();
+          if (el instanceof HTMLInputElement) {
+            if (el.type === 'checkbox') el.checked = !!initialValue;
+            else if (el.type === 'radio') el.checked = el.value === initialValue;
+            else el.value = initialValue ?? '';
+          } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+            el.value = initialValue ?? '';
           }
-          
+
+          bind(() => {
+            const value = getValue();
+            if (el instanceof HTMLInputElement) {
+              if (el.type === 'checkbox') el.checked = !!value;
+              else if (el.type === 'radio') el.checked = el.value === value;
+              else el.value = value ?? '';
+            } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+              el.value = value ?? '';
+            }
+          }, context);
+
           const updateState = (e: Event) => {
             const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
             if (target instanceof HTMLInputElement) {
-              if (target.type === 'checkbox') {
-                stateProxy.setByPath(key, target.checked);
-              } else if (target.type === 'radio') {
-                stateProxy.setByPath(key, target.checked ? target.value : '');
-              } else {
-                stateProxy.setByPath(key, target.value);
-              }
+              if (target.type === 'checkbox') setValue(target.checked);
+              else if (target.type === 'radio') setValue(target.checked ? target.value : '');
+              else setValue(target.value);
             } else {
-              stateProxy.setByPath(key, target.value);
+              setValue(target.value);
             }
           };
-          
+
           el.addEventListener('input', updateState);
           el.addEventListener('change', updateState);
           
-          const dependencies = extractDependencies(key);
-          bindings.push({node: el, template: `{${key}}`, dependencies });
+          cleanups.push(() => {
+            el.removeEventListener('input', updateState);
+            el.removeEventListener('change', updateState);
+          });
         }
-        el.removeAttribute("bind");
+      }
 
-        const childTag = el.tagName.toLowerCase();
-        if (components[childTag] && childTag !== tag) {
-          const childInputs: Record<string, any> = {};
-          const eventListeners: Array<{event: string, handler: Function}> = [];
-          const inputBindings: Array<{inputKey: string, stateKey: string, dependencies: string[]}> = [];
+      const childTag = el.tagName.toLowerCase();
+      if (components[childTag] && childTag !== tag) {
+        const childInputs: Record<string, any> = {};
+        const childEvents: Array<{event: string, handler: any}> = [];
+        const childBindings: Array<{ key: string; expr: string }> = [];
 
-          el.getAttributeNames().forEach(attr => {
-            if (attr.startsWith("on:")) {
-              const eventName = attr.slice(3);
-              const expr = el.getAttribute(attr)?.trim();
-              if (expr) {
-                eventListeners.push({
-                  event: eventName,
-                  handler: (e: Event) => {
-                    const ctx = { ...stateProxy, ...window, event: e };
-                    try {
-                      const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
-                      fn.call(stateProxy, ...Object.values(ctx));
-                    } catch (err) {
-                      console.error(`Error evaluating child component event "${expr}":`, err);
-                    }
-                  }
-                });
-              }
-              return;
+        el.getAttributeNames().forEach(attr => {
+          if (attr.startsWith('on:')) {
+            const eventName = attr.slice(3);
+            const expr = el.getAttribute(attr)?.trim();
+            if (expr) {
+              const handlerFn = (e: Event) => {
+                try {
+                  const captured = { ...context };
+                  const keys = [...Object.keys(captured), 'event'];
+                  const values = [
+                    ...Object.values(captured).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
+                    e
+                  ];
+                  const fn = getParamStmtFn(keys, expr);
+                  fn.call(stateProxy, ...values);
+                  try { flushUpdates(); } catch {}
+                } catch (err) {
+                  console.error(`Error in event handler:`, err);
+                }
+              };
+
+              childEvents.push({event: eventName, handler: handlerFn});
             }
 
-            const value = el.getAttribute(attr)!;
-            const bindMatch = value.match(/^\{(.*)\}$/);
-            if (bindMatch) {
-              const key = bindMatch[1].trim();
-              const resolvedValue = evaluateExpression(key, loopContext);
-              childInputs[attr] = resolvedValue;
-              
-              const dependencies = extractDependencies(key);
-              inputBindings.push({
-                inputKey: attr,
-                stateKey: key,
-                dependencies
-              });
+            return;
+          }
+
+          const value = el.getAttribute(attr)!;
+          const bindMatch = value.match(/^\{(.*)\}$/);
+
+          if (bindMatch) {
+            const expr = bindMatch[1].trim();
+              childInputs[attr] = evaluate(expr, context);
+              childBindings.push({ key: attr, expr });
             } else {
               try {
                 childInputs[attr] = JSON.parse(value);
               } catch {
                 childInputs[attr] = value;
-              }
-            }
-          });
-
-          const c = components[childTag](childInputs);
-          const childRoots = toNodeArray(c.root);
-
-          eventListeners.forEach(({event, handler}) => {
-            childRoots.forEach(root => {
-              if (root instanceof Element) {
-                root.addEventListener(event, handler as EventListener);
-              }
-            });
-          });
-
-          // Store child component instance with its bindings
-          if (inputBindings.length > 0) {
-            childComponents.push({
-              instance: c,
-              bindings: inputBindings
-            });
-          }
-
-          if (el.parentElement) {
-            c.mount(el.parentElement, el);
-            el.remove();
-          } else {
-            // If no parent yet, just replace the element
-            const childRoots = toNodeArray(c.root);
-            childRoots.forEach(root => {
-              el.parentNode?.insertBefore(root, el);
-            });
-            el.remove();
-          }
-
-          return;
-        }
-
-        el.getAttributeNames().forEach(attr => {
-          if (attr.startsWith("on:")) {
-            const eventName = attr.slice(3);
-            const expr = el.getAttribute(attr)?.trim();
-            if (expr) {
-              el.addEventListener(eventName, (e: Event) => {
-                const ctx = {...stateProxy, ...loopContext, ...window, event: e};
-                try {
-                  const fn = new Function(...Object.keys(ctx), `with(this){ return (${expr}) }`);
-                  fn.call(stateProxy, ...Object.values(ctx));
-                } catch (err) {
-                  console.error(`Error evaluating event "${expr}":`, err);
-                }
-              });
-            }
-            el.removeAttribute(attr);
-          } else {
-            const expr = el.getAttribute(attr);
-            if (expr) {
-              const result = evaluateExpression(expr, loopContext);
-              if (result !== undefined) {
-                const dependencies = extractDependencies(expr, loopContext);
-                if (dependencies.length > 0) {
-                  attributeBindings.push({
-                    element: el,
-                    attribute: attr,
-                    expression: expr,
-                    dependencies,
-                    context: loopContext
-                  });
-                }
-                el.setAttribute(attr, result);
-              }
             }
           }
         });
 
-        for (const child of Array.from(node.childNodes)) {
-          walk(child, loopContext);
+        const childInstance = components[childTag](childInputs);
+
+        if (childBindings.length > 0) {
+          bind(() => {
+            for (const { key, expr } of childBindings) {
+              const newValue = evaluate(expr, context);
+              if (childInstance.state) {
+                childInstance.state[key] = newValue;
+              }
+            }
+          }, context);
         }
-      }
-    }
 
-    function renderLoop(loopData: typeof loops[0], parentContext: Record<string, any> = {}) {
-      const nodesToRemove = new Set(loopData.renderedNodes);
-      
-      for (let i = conditionals.length - 1; i >= 0; i--) {
-        const placeholder = conditionals[i].placeholder;
-        for (const node of nodesToRemove) {
-          if (node.contains(placeholder)) {
-            conditionals.splice(i, 1);
-            break;
-          }
-        }
-      }
-      
-      for (let i = loops.length - 1; i >= 0; i--) {
-        if (loops[i] === loopData) continue;
-        const placeholder = loops[i].placeholder;
-        for (const node of nodesToRemove) {
-          if (node.contains(placeholder)) {
-            loops.splice(i, 1);
-            break;
-          }
-        }
-      }
-      
-      loopData.renderedNodes.forEach(node => node.parentNode?.removeChild(node));
-      loopData.renderedNodes = [];
+        childEvents.forEach(({event, handler}) => {
+          childInstance.root.addEventListener(event, handler);
+          cleanups.push(() => {
+            childInstance.root.removeEventListener(event, handler);
+          });
+        });
 
-      const array = evaluateExpression(loopData.arrayExpr, parentContext);
-      if (!Array.isArray(array)) return;
+        childInstance.mount(el.parentElement, el);
+        el.remove();
 
-      const fragment = document.createDocumentFragment();
-
-      for (let index = 0; index < array.length; index++) {
-        const item = array[index];
-        const context = { ...parentContext, [loopData.itemVar]: item };
-        if (loopData.indexVar) context[loopData.indexVar] = index;
-        const rendered = loopData.template.cloneNode(true) as Element;
-        walk(rendered, context);
-        fragment.appendChild(rendered);
-        loopData.renderedNodes.push(rendered);
+        return;
       }
 
-      loopData.placeholder.parentNode?.insertBefore(fragment, loopData.placeholder.nextSibling);
+      processEvents(el, context);
+      processAttributes(el, context);
+
+      Array.from(el.childNodes).forEach(child => walk(child, context));
     }
 
     walk(root);
 
-    function updateConditionals(changedKey: string) {
-      conditionals.forEach(cond => {
-        if (!cond.dependencies.includes(changedKey)) return;
-        
-        const shouldRender = !!evaluateExpression(cond.expression, cond.context);
-        const currentlyRendered = cond.placeholder.nextSibling && 
-                                  cond.placeholder.nextSibling.nodeType === Node.ELEMENT_NODE;
-        
-        if (shouldRender && !currentlyRendered) {
-          const rendered = cond.template.cloneNode(true) as Element;
-          cond.placeholder.parentNode?.insertBefore(rendered, cond.placeholder.nextSibling);
-          walk(rendered, cond.context);
-        } else if (!shouldRender && currentlyRendered) {
-          cond.placeholder.nextSibling?.remove();
-        }
-      });
-    }
-
-    function updateLoops(changedKey: string) {
-      loops.forEach(loopData => {
-        if (!loopData.dependencies.includes(changedKey)) return;
-        renderLoop(loopData);
-      });
-    }
-
-    function updateChildComponents(changedKey: string) {
-      childComponents.forEach(child => {
-        child.bindings.forEach(binding => {
-          if (!binding.dependencies.includes(changedKey)) return;
-          
-          const newValue = evaluateExpression(binding.stateKey);
-          
-          if (child.instance.state) {
-            child.instance.state[binding.inputKey] = newValue;
-          }
-        });
-      });
-    }
-
-    function updateVisibility(changedKey: string) {
-      conditionalVisibilty.forEach(cond => {
-        if (!cond.dependencies.includes(changedKey)) return;
-        
-        const shouldShow = !!evaluateExpression(cond.expression);
-        const currentlyShowing = cond.node.style.display !== 'none';
-        
-        if (shouldShow && !currentlyShowing) {
-          cond.node.style.display = cond.style;
-        } else if (!shouldShow && currentlyShowing) {
-          cond.style = cond.node.style.display;
-          cond.node.style.display = 'none';
-        }
-      });
-    }
-
-    function updateAttributes(changedKey: string) {
-      attributeBindings.forEach(binding => {
-        if (!binding.dependencies.includes(changedKey)) return;
-        
-        const result = evaluateExpression(binding.expression, binding.context);
-        const booleanAttributes = new Set(["disabled", "readonly", "checked", "selected"]);
-        if (booleanAttributes.has(binding.attribute)) {
-          binding.element.toggleAttribute(binding.attribute, !!result);
-        } else {
-          binding.element.setAttribute(binding.attribute, result);
-        }
-      });
-    }
-
-    function updateBindings(changedKey: string) {
-      bindings.forEach(binding => {
-        if (!binding.dependencies.includes(changedKey)) return;
-
-        const el = binding.node as HTMLElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-
-        let result = binding.template;
-        const matches = binding.template.match(/\{(.*?)\}/g);
-        if (matches) {
-          for (const match of matches) {
-            const expr = match.slice(1, -1).trim();
-            const value = evaluateExpression(expr);
-            result = result.replace(match, String(value ?? ''));
-          }
-        }
-
-        if (el instanceof HTMLInputElement) {
-          if (el.type === "checkbox") {
-            const expr = binding.template.match(/\{(.*?)\}/)?.[1]?.trim() || binding.dependencies[0];
-            el.checked = !!evaluateExpression(expr);
-          } else if (el.type === "radio") {
-            const expr = binding.template.match(/\{(.*?)\}/)?.[1]?.trim() || binding.dependencies[0];
-            el.checked = el.value === evaluateExpression(expr);
-          } else {
-            el.value = result.replace(/^\{|\}$/g, '');
-          }
-        } else if (el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
-          el.value = result.replace(/^\{|\}$/g, '');
-        } else if ("data" in el) {
-          (el as any).data = result;
-        }
-      });
-    }
-
-    function updateKey(key: string) {
-      updateBindings(key);
-      updateConditionals(key);
-      updateLoops(key);
-      updateVisibility(key);
-      updateAttributes(key);
-      updateChildComponents(key);
-      
-      computedProperties.forEach((computed, computedKey) => {
-        const rootKey = key.split('.')[0];
-        
-        if (computed.dependencies.has(rootKey) || computed.dependencies.has(key)) {
-          updateKey(computedKey);
-        }
-      });
-    }
-
-    function update() {
-      for (const key of Object.keys(stateProxy)) {
-        updateKey(key.toString());
-      }
-    }
-
-    update();
-
-    const unsubscribers: Array<() => void> = [];
-    usedStoreKeys.forEach((keys, store) => {
-      const subscribersMap = subscribers.get(store);
-      if (subscribersMap) {
-        keys.forEach(key => {
-          if (!subscribersMap.has(key)) {
-            subscribersMap.set(key, new Set());
-          }
-          const callback = () => updateKey(key);
-          subscribersMap.get(key)!.add(callback);
-          unsubscribers.push(() => subscribersMap.get(key)?.delete(callback));
-        });
-      }
-    });
-
     Object.defineProperty(stateProxy, 'emit', {
       value: (name: string, detail?: any) => {
-        root.dispatchEvent(
-          new CustomEvent(name, { detail, bubbles: true })
-        );
+        root.dispatchEvent(new CustomEvent(name, { detail, bubbles: true }));
       },
       enumerable: false
     });
 
     return {
-      root: root,
+      root,
       mount(target: HTMLElement, before?: HTMLElement) {
         if (before) {
           target.insertBefore(root, before);
         } else {
           target.appendChild(root);
         }
-        update();
+        
+        flushUpdates();
+        
         if ('mounted' in stateProxy && typeof (stateProxy as any).mounted === 'function') {
           (stateProxy as any).mounted();
         }
       },
-      state: stateProxy,
+      state: stateProxy as S & { emit: (name: string, detail?: any) => void },
       unmount() {
-        root.parentElement?.removeChild(root);
-        unsubscribers.forEach(unsub => unsub());
+        root.remove();
+        
+        cleanups.forEach(cleanup => cleanup());
+        cleanups.length = 0;
+        
+        bindings.length = 0;
+        
         if ('unmounted' in stateProxy && typeof (stateProxy as any).unmounted === 'function') {
           (stateProxy as any).unmounted();
         }

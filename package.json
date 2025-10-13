@@ -1,12 +1,13 @@
 {
   "name": "@pvorselaars/minui",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "A minimal TypeScript UI framework",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "scripts": {
-    "build": "rm -rf dist && esbuild index.ts --bundle --outfile=dist/index.js --format=esm",
+    "build": "rm -rf dist && esbuild index.ts --bundle --outfile=dist/index.js --format=esm --minify",
     "build:dev": "bun run build --sourcemap",
+    "lint": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
