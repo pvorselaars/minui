@@ -110,10 +110,6 @@ export function component<S>(
     const bindingRegistry: Map<number, { update: () => void; deps: Set<string> }> = new Map();
     let bindingIdCounter = 0;
 
-    // pendingOldValues stores the previous value for a root key during a batch so optimized handlers
-    // can know what changed (used by optimized index handlers).
-    const pendingOldValues: Map<string, any> = new Map();
-
     // pendingArrayOps stores recent array mutator operations (push/pop/shift/unshift/splice)
     // keyed by root state key so `for` can perform incremental updates instead of full re-renders.
     const pendingArrayOps: Map<string, { op: string; args: any[] }> = new Map();
@@ -226,11 +222,6 @@ export function component<S>(
           const isAlreadyProxy = value?.__proxy;
           // Capture previous root-level value for optimized handlers (selected-by fast-path)
           const rootKey = path.length > 0 ? path[0] : key.toString();
-          try {
-            if (!pendingOldValues.has(rootKey)) {
-              (pendingOldValues as Map<string, any>).set(rootKey, (fullState as any)[rootKey]);
-            }
-          } catch {}
 
           if (value && typeof value === 'object' && !isAlreadyProxy && 
               !(value instanceof Date) && !(value instanceof RegExp)) {
@@ -358,9 +349,6 @@ export function component<S>(
       if (pendingKeys.size > 0) {
         flushUpdates();
       }
-
-      // Clear the pendingOldValues map after processing so future changes capture new old-values
-      pendingOldValues.clear();
 
       // Clear pending array ops map
       pendingArrayOps.clear();
