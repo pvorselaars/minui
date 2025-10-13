@@ -10,8 +10,8 @@ const __param_stmt_cache__: Map<string, Function> = new Map();
 // Preprocess template to convert self-closing tags to properly closed tags
 function preprocessTemplate(template: string): string {
   // Match self-closing tags like <component-name ... />
-  // This regex matches: <tag-name (attributes) />
-  const result = template.replace(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)\/>/g, (match, tagName, attrs) => {
+  // This regex matches: <tag-name (attributes) /> with optional whitespace
+  const result = template.replace(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)(\s*)\/>/g, (match, tagName, attrs) => {
     return `<${tagName}${attrs}></${tagName}>`;
   });
   return result;

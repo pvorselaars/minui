@@ -1564,6 +1564,13 @@ describe("edge cases and error handling", () => {
     expect(lis[1].textContent).toBe("2");
     expect(lis[2].textContent).toBe("1");
   });
+
+  test("should throw error when registering duplicate component", async () => {
+    const factory1 = component("duplicate-test", "Test", () => ({}));
+    expect(() => {
+      component("duplicate-test", "Test2", () => ({}));
+    }).toThrow("Component 'duplicate-test' already exists!");
+  });
 });
 
 test('parent listens to child component events via on:custom attribute', async () => {
@@ -1644,15 +1651,60 @@ describe('undefined-handling in if', () => {
 
   test('if="!object" should render when object exists but falsy', async () => {
     const factory = component(
-      'dash-null',
-      `<dashboard if="!object">Dash</dashboard>`,
-      () => ({ object: null as any })
+      "falsy-object-test",
+      `<div if="!object">Shown</div><div if="object">Hidden</div>`,
+      () => ({ object: "" })
     );
 
     const { root, mount } = factory();
     mount(document.body);
 
-    const dash = root.querySelector('dashboard');
-    expect(dash).not.toBeNull();
+    expect(root.querySelectorAll("div").length).toBe(1);
+    expect(root.textContent).toBe("Shown");
   });
+
+  test("should handle expression evaluation errors gracefully", async () => {
+    const factory = component(
+      "error-test",
+      `<div>{nonexistent.property.deep}</div>`,
+      () => ({})
+    );
+
+    const { root, mount } = factory();
+    mount(document.body);
+
+    // Should not crash, should show empty or handle error
+    expect(root.querySelector("div")).toBeTruthy();
+  });
+
+  test("should handle complex expressions", async () => {
+    const factory = component(
+      "complex-expr",
+      `<div>{count * 2}</div>`,
+      () => ({ count: 5 })
+    );
+
+    const { root, mount } = factory();
+    mount(document.body);
+
+    expect(root.textContent).toBe("10");
+  });
+});
+
+test("should handle multiple mount/unmount cycles", async () => {
+  const factory = component(
+    "lifecycle-test-unique",
+    `<div>{count}</div>`,
+    () => ({ count: 0 })
+  );
+
+  const { root, mount, unmount } = factory();
+
+  // Mount and unmount multiple times
+  for (let i = 0; i < 3; i++) {
+    mount(document.body);
+    expect(document.body.contains(root)).toBe(true);
+    unmount();
+    expect(document.body.contains(root)).toBe(false);
+  }
 });

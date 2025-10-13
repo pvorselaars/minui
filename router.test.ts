@@ -46,4 +46,31 @@ describe("router", () => {
         go("/notfound");
         expect(target.innerHTML).toBe('<home>Home</home>');
     });
+
+    test("handles query parameters with special characters", async () => {
+        const Special = component("special", "{message} {id}", () => ({}));
+        const specialRoutes = { "/": Home, "/special": Special };
+        router(target, specialRoutes);
+
+        go("/special?message=hello%20world&id=123%2Btest");
+        expect(target.innerHTML).toBe('<special>hello world 123+test</special>');
+    });
+
+    test("handles multiple query parameters", async () => {
+        const MultiParam = component("multiparam", "{a} {b} {c}", () => ({}));
+        const multiRoutes = { "/": Home, "/multi": MultiParam };
+        router(target, multiRoutes);
+
+        go("/multi?a=1&b=2&c=3");
+        expect(target.innerHTML).toBe('<multiparam>1 2 3</multiparam>');
+    });
+
+    test("handles empty query parameter values", async () => {
+        const EmptyParam = component("emptyparam", "{empty} {present}", () => ({}));
+        const emptyRoutes = { "/": Home, "/empty": EmptyParam };
+        router(target, emptyRoutes);
+
+        go("/empty?empty=&present=value");
+        expect(target.innerHTML).toBe('<emptyparam> value</emptyparam>');
+    });
 });
