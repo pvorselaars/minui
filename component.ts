@@ -501,11 +501,14 @@ export function component<S>(
 
         bind(() => {
           const shouldShow = !!evaluate(expr, context);
-          
           if (shouldShow && !rendered) {
             rendered = template.cloneNode(true) as Element;
             placeholder.parentNode?.insertBefore(rendered, placeholder.nextSibling);
             walk(rendered, context);
+            const next = placeholder.nextSibling as Element | null;
+            if (next && next.nodeType === Node.ELEMENT_NODE) {
+              rendered = next as Element;
+            }
           } else if (!shouldShow && rendered) {
             rendered.remove();
             rendered = null;
