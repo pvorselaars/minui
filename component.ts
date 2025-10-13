@@ -7,6 +7,16 @@ const styles = new Set<string>();
 const __expr_cache__: Map<string, Function> = new Map();
 const __param_stmt_cache__: Map<string, Function> = new Map();
 
+// Preprocess template to convert self-closing tags to properly closed tags
+function preprocessTemplate(template: string): string {
+  // Match self-closing tags like <component-name ... />
+  // This regex matches: <tag-name (attributes) />
+  const result = template.replace(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)\/>/g, (match, tagName, attrs) => {
+    return `<${tagName}${attrs}></${tagName}>`;
+  });
+  return result;
+}
+
 function getExprFn(expr: string) {
   let fn = __expr_cache__.get(expr);
   if (!fn) {
@@ -58,9 +68,12 @@ export function component<S>(
   if (components[tag]) throw new Error(`Component '${tag}' already exists!`);
   registerStyle(tag, style);
 
+  // Preprocess template once when component is registered
+  const processedTemplate = preprocessTemplate(template.trim());
+
   const factory = function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
-    root.innerHTML = template.trim();
+    root.innerHTML = processedTemplate;
 
     // All reactive bindings (text, attributes, conditionals, loops, etc.)
     const bindings: Array<{

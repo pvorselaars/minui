@@ -185,6 +185,50 @@ describe("component()", () => {
     expect(document.body.innerHTML).toBe("");
   });
 
+  test("should support self-closing tags for components", async () => {
+    const childFactory = component(
+      "self-closing-child",
+      `<span>Child content</span>`,
+      () => ({})
+    );
+
+    const parentFactory = component(
+      "self-closing-parent",
+      `<div><self-closing-child /></div>`,
+      () => ({})
+    );
+
+    const { root, mount } = parentFactory();
+    mount(document.body);
+
+    expect(document.body.innerHTML).toContain("Child content");
+    expect(root.querySelector("self-closing-child")).toBeTruthy();
+  });
+
+  test("should support self-closing tags with inputs", async () => {
+    const childFactory = component(
+      "input-child",
+      `<input bind="value" />`,
+      (input?: { value: string }) => ({
+        value: input?.value ?? "test"
+      })
+    );
+
+    const parentFactory = component(
+      "input-parent",
+      `<div><input-child value="hello" /></div>`,
+      () => ({})
+    );
+
+    const { root, mount } = parentFactory();
+    mount(document.body);
+
+    const child = root.querySelector("input-child");
+    const input = child?.querySelector("input");
+    expect(child).toBeTruthy();
+    expect(input?.value).toBe("hello");
+  });
+
   test("should call mounted lifecycle", async () => {
     let mountedCalled = false;
 
