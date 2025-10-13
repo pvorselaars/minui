@@ -468,6 +468,71 @@ export function component<S>(
       return parts;
     }
 
+    // Add this helper function inside the factory (before `walk`)
+    function processEvents(el: HTMLElement, context: Record<string, any>) {
+      el.getAttributeNames().forEach(attr => {
+        if (!attr.startsWith('on:')) return;
+        const eventName = attr.slice(3);
+        const expr = el.getAttribute(attr)?.trim();
+        if (!expr) return;
+        // Capture only the local context keys to avoid enumerating the state proxy.
+        const capturedContext = { ...context };
+        const paramKeys = [...Object.keys(capturedContext), 'event'];
+
+        const handler = (e: Event) => {
+          try {
+            // Bind functions to stateProxy and provide event as last arg
+            const values = [
+              ...Object.values(capturedContext).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
+              e
+            ];
+            const fn = getParamStmtFn(paramKeys, expr);
+            fn.call(stateProxy, ...values);
+            try { flushUpdates(); } catch {}
+          } catch (err) {
+            console.error(`Error in event handler "${expr}":`, err);
+            console.error('Available context keys:', paramKeys);
+          }
+        };
+
+        el.addEventListener(eventName, handler);
+
+        // Cleanup event listener
+        cleanups.push(() => {
+          el.removeEventListener(eventName, handler);
+        });
+
+        el.removeAttribute(attr);
+      });
+    }
+
+    function processAttributes(el: HTMLElement, context: Record<string, any>) {
+      const attrExprs: Array<{ attr: string; expr: string }> = [];
+      const booleanAttrs = new Set(['disabled', 'readonly', 'checked', 'selected']);
+
+      el.getAttributeNames().forEach(attr => {
+        const raw = el.getAttribute(attr);
+        if (raw == null) return;
+        attrExprs.push({ attr, expr: raw });
+      });
+
+      // Aggregate attribute expressions into a single binding
+      if (attrExprs.length > 0) {
+        bind(() => {
+          for (const { attr, expr } of attrExprs) {
+            const result = evaluate(expr, context);
+            if (result !== undefined) {
+              if (booleanAttrs.has(attr)) {
+                el.toggleAttribute(attr, !!result);
+              } else {
+                el.setAttribute(attr, String(result));
+              }
+            }
+          }
+        }, context);
+      }
+    }
+
     function walk(node: Node, context: Record<string, any> = {}) {
       if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent || '';
@@ -588,12 +653,12 @@ export function component<S>(
                     };
                     bind(updateItem, itemContext);
                     // Ensure event attributes on the clone are attached
-                    attachEventAttributes(clone, itemContext);
+                    processEvents(clone as HTMLElement, itemContext);
                     // Walk child nodes for nested directives
                     Array.from((clone as Element).childNodes).forEach(child => walk(child, itemContext));
                   } else {
                     // Ensure event attributes on the clone are attached and process children
-                    attachEventAttributes(clone, itemContext);
+                    processEvents(clone as HTMLElement, itemContext);
                     walk(clone, itemContext);
                   }
                   // Insert after last rendered node (append). If none, insert after placeholder.
@@ -689,7 +754,7 @@ export function component<S>(
                   bind(updateItem, itemContext);
                   Array.from((clone as Element).childNodes).forEach(child => walk(child, itemContext));
                   // Ensure event attributes are attached for the clone
-                  attachEventAttributes(clone, itemContext);
+                  processEvents(clone as HTMLElement, itemContext);
                   // selected-by: per-clone binding for full render
                   if (selectedBy && indexVar) {
                     const stateKey = selectedBy.trim();
@@ -707,7 +772,7 @@ export function component<S>(
                   }
                 } else {
                   walk(clone, itemContext);
-                  attachEventAttributes(clone, itemContext);
+                  processEvents(clone as HTMLElement, itemContext);
                   if (selectedBy && indexVar) {
                     const stateKey = selectedBy.trim();
                     bind(() => {
@@ -893,101 +958,12 @@ export function component<S>(
       }
 
       // Handle event bindings
+      processEvents(el, context);
       // Collect attributes and events. Attributes are treated as expressions (original behavior)
-      const attrExprs: Array<{ attr: string; expr: string }> = [];
-      const booleanAttrs = new Set(['disabled', 'readonly', 'checked', 'selected']);
-
-      el.getAttributeNames().forEach(attr => {
-        if (attr.startsWith('on:')) {
-          const eventName = attr.slice(3);
-          const expr = el.getAttribute(attr)?.trim();
-          if (expr) {
-            // Capture only the local context keys to avoid enumerating the state proxy.
-            const capturedContext = { ...context };
-            const paramKeys = [...Object.keys(capturedContext), 'event'];
-
-            const handler = (e: Event) => {
-              try {
-                // Bind functions to stateProxy and provide event as last arg
-                const values = [
-                  ...Object.values(capturedContext).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
-                  e
-                ];
-                const fn = getParamStmtFn(paramKeys, expr);
-                fn.call(stateProxy, ...values);
-                try { flushUpdates(); } catch {}
-              } catch (err) {
-                console.error(`Error in event handler "${expr}":`, err);
-                console.error('Available context keys:', paramKeys);
-              }
-            };
-
-            el.addEventListener(eventName, handler);
-
-            // Cleanup event listener
-            cleanups.push(() => {
-              el.removeEventListener(eventName, handler);
-            });
-          }
-
-          el.removeAttribute(attr);
-          return;
-        }
-
-        const raw = el.getAttribute(attr);
-        if (raw == null) return;
-
-        // Preserve original behavior: treat attribute value as an expression to evaluate in scope
-        attrExprs.push({ attr, expr: raw });
-      });
-
-      // Aggregate all attribute expressions into a single binding to reduce number of binds
-      if (attrExprs.length > 0) {
-          bind(() => {
-            for (const { attr, expr } of attrExprs) {
-              const result = evaluate(expr, context);
-              if (result !== undefined) {
-                if (booleanAttrs.has(attr)) {
-                  el.toggleAttribute(attr, !!result);
-                } else {
-                  el.setAttribute(attr, String(result));
-                }
-              }
-            }
-          }, context);
-        }
+      processAttributes(el, context);
 
       // Recurse into children
       Array.from(el.childNodes).forEach(child => walk(child, context));
-    }
-
-    // Attach only event attributes (on:...) for an element using provided context.
-    // This is used by the optimized per-item rendering path which avoids calling full `walk(clone)`.
-    function attachEventAttributes(el: Element, context: Record<string, any> = {}) {
-      el.getAttributeNames().forEach(attr => {
-        if (!attr.startsWith('on:')) return;
-        const eventName = attr.slice(3);
-        const expr = el.getAttribute(attr)?.trim();
-        if (!expr) return;
-
-        const capturedContext = { ...context };
-        // Use parameterized statement function so local loop variables (e.g. i) are passed as params
-        const paramKeys = [...Object.keys(capturedContext), 'event'];
-        const paramFn = getParamStmtFn(paramKeys, expr);
-        const handler = (e: Event) => {
-          // Bind function values from capturedContext to stateProxy for correct method `this`.
-          const values = [...Object.values(capturedContext).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)), e];
-          try {
-            paramFn.call(stateProxy, ...values);
-          } catch (err) {
-            console.error(`Error in event handler "${expr}":`, err);
-          }
-        };
-
-        el.addEventListener(eventName, handler);
-        cleanups.push(() => el.removeEventListener(eventName, handler));
-        el.removeAttribute(attr);
-      });
     }
 
     walk(root);
