@@ -1,7 +1,7 @@
 // Comprehensive benchmark for MinUI component mounting and updates
 // Run with: bun bench/benchmark.js
 
-import { component, __minui_profiler__ } from '../component';
+import { component } from '../component';
 import { Window } from 'happy-dom';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 
@@ -160,15 +160,6 @@ async function runBenchmark() {
   printStats('batch push (mean per-batch)', batchPushMeans);
   printStats('unmount', unmountSamples);
 
-  try {
-    if (__minui_profiler__ && __minui_profiler__.enabled) {
-      console.log('\n--- profiler snapshot ---');
-      console.log(JSON.stringify(__minui_profiler__.snapshot(), null, 2));
-    }
-  } catch (e) {
-    console.error('Profiler snapshot failed', e && e.stack ? e.stack : e);
-  }
-
   // return aggregated data for persistence
   return {
     config: { N, UPDATES, RUNS, WARMUP, BATCH },
@@ -179,10 +170,6 @@ async function runBenchmark() {
     popSamples,
     batchPushMeans,
     unmountSamples,
-    // include profiler snapshot data if available for later persistence
-    __profiler__: (__minui_profiler__ && typeof __minui_profiler__.snapshot === 'function')
-      ? (__minui_profiler__.enabled ? __minui_profiler__.snapshot() : null)
-      : null
   };
 }
 

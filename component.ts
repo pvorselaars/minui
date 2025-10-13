@@ -220,29 +220,31 @@ export function component<S>(
     // Helper: evaluate expression in scope
     function evaluate(expr: string, context: Record<string, any> = {}): any {
       try {
-        const ctx: Record<string, any> = context && typeof context === 'object' ? Object.assign({}, context) : {};
-        if (!('emit' in ctx) && (stateProxy as any).emit) ctx.emit = (stateProxy as any).emit;
-
-        const scope = new Proxy(ctx, {
-          has(target, prop) {
-            return prop in target || prop in stateProxy;
-          },
-          get(target, prop, receiver) {
-            if (prop in target) return (target as any)[prop];
-            return (stateProxy as any)[prop as any];
-          },
-          ownKeys(target) {
-            return Reflect.ownKeys(target);
-          },
-          getOwnPropertyDescriptor(target, prop) {
-            const desc = Object.getOwnPropertyDescriptor(target, prop as any);
-            if (desc) return desc;
-            return undefined;
-          }
-        });
-
-        const fn = getExprFn(expr);
-        return fn(scope);
+        if (Object.keys(context).length === 0) {
+          const fn = getExprFn(expr);
+          return fn(stateProxy);
+        } else {
+          const ctx: Record<string, any> = Object.assign({}, context);
+          const scope = new Proxy(ctx, {
+            has(target, prop) {
+              return prop in target || prop in stateProxy;
+            },
+            get(target, prop, receiver) {
+              if (prop in target) return (target as any)[prop];
+              return (stateProxy as any)[prop as any];
+            },
+            ownKeys(target) {
+              return Reflect.ownKeys(target);
+            },
+            getOwnPropertyDescriptor(target, prop) {
+              const desc = Object.getOwnPropertyDescriptor(target, prop as any);
+              if (desc) return desc;
+              return undefined;
+            }
+          });
+          const fn = getExprFn(expr);
+          return fn(scope);
+        }
       } catch {
         return undefined;
       }
