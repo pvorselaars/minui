@@ -143,9 +143,10 @@ export function component<S>(
     });
 
     // Proxy factory with automatic dependency tracking
-    function createProxy(obj: any, path: string[]): any {
+    function createProxy(obj: any, path: string[], depth = 0): any {
       if (obj === null || typeof obj !== 'object') return obj;
       if (obj.__proxy) return obj;
+      if (depth > 2) return obj;
 
       const handler: ProxyHandler<any> = {
         get(target, key: string | symbol) {
@@ -176,20 +177,21 @@ export function component<S>(
 
           // Recurse into objects
           if (typeof value === 'object' && value !== null) {
-            return createProxy(value, [...path, key.toString()]);
+            return createProxy(value, [...path, key.toString()], depth + 1);
           }
 
           return value;
         },
 
         set(target, key: string | symbol, value: any) {
+          if (target[key] === value) return true;
+
           const isAlreadyProxy = value?.__proxy;
-          // Capture previous root-level value for optimized handlers (selected-by fast-path)
           const rootKey = path.length > 0 ? path[0] : key.toString();
 
           if (value && typeof value === 'object' && !isAlreadyProxy && 
               !(value instanceof Date) && !(value instanceof RegExp)) {
-            target[key] = createProxy(value, [...path, key.toString()]);
+            target[key] = createProxy(value, [...path, key.toString()], depth + 1);
           } else {
             target[key] = value;
           }
