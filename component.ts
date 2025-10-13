@@ -3,15 +3,11 @@ import { go } from "./router";
 const components: Record<string, (input?: any) => any> = {};
 const styles = new Set<string>();
 
-// Global caches for compiled expressions/statements to avoid recompilation.
 const __expr_cache__: Map<string, Function> = new Map();
 const __param_stmt_cache__: Map<string, Function> = new Map();
 
-// Preprocess template to convert self-closing tags to properly closed tags
 function preprocessTemplate(template: string): string {
-  // Match self-closing tags like <component-name ... />
-  // This regex matches: <tag-name (attributes) /> with optional whitespace
-  const result = template.replace(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)(\s*)\/>/g, (match, tagName, attrs) => {
+  const result = template.replace(/<([a-zA-Z][a-zA-Z0-9-]*)([^>]*)\/>/g, (match, tagName, attrs) => {
     return `<${tagName}${attrs}></${tagName}>`;
   });
   return result;
@@ -37,7 +33,6 @@ function getParamStmtFn(keys: string[], expr: string) {
   return fn;
 }
 
-// Helper to wait for batched updates (useful for tests)
 export async function nextTick() {
   await Promise.resolve();
 }
@@ -68,37 +63,28 @@ export function component<S>(
   if (components[tag]) throw new Error(`Component '${tag}' already exists!`);
   registerStyle(tag, style);
 
-  // Preprocess template once when component is registered
   const processedTemplate = preprocessTemplate(template.trim());
 
   const factory = function (input?: any, routeParams?: any) {
     const root = document.createElement(tag);
     root.innerHTML = processedTemplate;
 
-    // All reactive bindings (text, attributes, conditionals, loops, etc.)
     const bindings: Array<{
       update: () => void;
       deps: Set<string>;
     }> = [];
 
-    // depMap maps a dependency key (root state key) to an array of binding ids that depend on it.
-    // Using numeric ids and a registry reduces Set allocations and can be iterated quickly.
     const depMap: Map<string, number[]> = new Map();
     const bindingRegistry: Map<number, { update: () => void; deps: Set<string> }> = new Map();
     let bindingIdCounter = 0;
 
-    // pendingArrayOps stores recent array mutator operations (push/pop/shift/unshift/splice)
-    // keyed by root state key so `for` can perform incremental updates instead of full re-renders.
     const pendingArrayOps: Map<string, { op: string; args: any[] }> = new Map();
 
-    // Cleanup functions for memory leak prevention
     const cleanups: Array<() => void> = [];
 
-    // Batch update state
     let updateScheduled = false;
     const pendingKeys = new Set<string>();
 
-    // Create reactive state
     const resolvedState = state(input);
     const fullState = Object.create(
       Object.getPrototypeOf(resolvedState || {}),
@@ -109,10 +95,8 @@ export function component<S>(
       }
     );
 
-    // Dependency tracking
     let tracking: Set<string> | null = null;
 
-    // Track computed properties and their dependencies
     const computeds = new Map<string, { getter: () => any; deps: Set<string> }>();
     for (const [key, desc] of Object.entries(Object.getOwnPropertyDescriptors(fullState))) {
       if (desc.get) {
@@ -120,12 +104,9 @@ export function component<S>(
       }
     }
 
-    // Create reactive proxy
     const stateProxy = createProxy(fullState, []);
 
-    // Setup computed properties on proxy and track their dependencies
     computeds.forEach((computed, key) => {
-      // Initial dependency tracking
       const prev = tracking;
       tracking = new Set();
       try {
@@ -136,12 +117,10 @@ export function component<S>(
 
       Object.defineProperty(stateProxy, key, {
         get() {
-          // Track this computed as a dependency if we're tracking
           if (tracking) {
             tracking.add(key);
           }
           
-          // Re-track dependencies on each access
           const prevTracking = tracking;
           tracking = new Set();
           const result = computed.getter.call(stateProxy);
@@ -155,7 +134,6 @@ export function component<S>(
       });
     });
 
-    // Proxy factory with automatic dependency tracking
     function createProxy(obj: any, path: string[], depth = 0): any {
       if (obj === null || typeof obj !== 'object') return obj;
       if (obj.__proxy) return obj;
@@ -165,7 +143,6 @@ export function component<S>(
         get(target, key: string | symbol) {
           if (key === '__proxy') return true;
           
-          // Track access
           if (tracking && typeof key === 'string' && key !== 'emit') {
             const rootKey = path.length > 0 ? path[0] : key;
             tracking.add(rootKey);
@@ -173,13 +150,11 @@ export function component<S>(
 
           const value = target[key];
 
-          // Wrap array methods
           if (Array.isArray(target) && typeof value === 'function' && 
               ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse'].includes(key as string)) {
             return function(...args: any[]) {
               const result = value.apply(target, args);
               const rootKey = path.length > 0 ? path[0] : 'length';
-              // Record simple array ops for incremental handling in `for`
               try {
                 pendingArrayOps.set(rootKey, { op: key.toString(), args });
               } catch {}
@@ -188,7 +163,6 @@ export function component<S>(
             };
           }
 
-          // Recurse into objects
           if (typeof value === 'object' && value !== null) {
             return createProxy(value, [...path, key.toString()], depth + 1);
           }
@@ -218,7 +192,6 @@ export function component<S>(
       return new Proxy(obj, handler);
     }
 
-    // Helper: evaluate expression with automatic tracking
     function track<T>(fn: () => T, context: Record<string, any> = {}): [T, Set<string>] {
       const deps = new Set<string>();
       const prev = tracking;
@@ -232,7 +205,6 @@ export function component<S>(
       }
     }
 
-    // Helper: evaluate expression in scope
     function evaluate(expr: string, context: Record<string, any> = {}): any {
       try {
         if (Object.keys(context).length === 0) {
@@ -265,7 +237,6 @@ export function component<S>(
       }
     }
 
-    // Notify all bindings that depend on a key (batched)
     function notify(key: string) {
       pendingKeys.add(key);
       
@@ -284,15 +255,12 @@ export function component<S>(
       pendingKeys.clear();
       updateScheduled = false;
 
-      // Process all pending updates using depMap for O(sum(deps touched)) instead of O(keys * allBindings)
       const updatedBindings = new Set<number>();
 
       for (const k of keys) {
-        // (no optimized index updates)
 
         const set = depMap.get(k);
         if (set) {
-          // Snapshot ids and resolve to bindings from registry; this allows lazy cleanup of removed bindings
           const listIds = Array.from(set);
           for (const id of listIds) {
             const binding = bindingRegistry.get(id);
@@ -304,21 +272,17 @@ export function component<S>(
           }
         }
 
-        // Check if any computed properties depend on this key
         computeds.forEach((computed, computedKey) => {
           if (computed.deps.has(k)) {
-            // Re-add computed key to trigger its dependents
             pendingKeys.add(computedKey);
           }
         });
       }
 
-      // If computeds added more keys, flush again
       if (pendingKeys.size > 0) {
         flushUpdates();
       }
 
-      // Clear pending array ops map
       pendingArrayOps.clear();
     }
 
@@ -334,11 +298,9 @@ export function component<S>(
       const binding = { update: updateFn, deps };
       bindings.push(binding);
 
-      // Assign a numeric id and store in registry
       const id = ++bindingIdCounter;
       bindingRegistry.set(id, binding);
 
-      // Register binding id in depMap arrays
       for (const d of deps) {
         let arr = depMap.get(d);
         if (!arr) {
@@ -348,12 +310,10 @@ export function component<S>(
         arr.push(id);
       }
 
-      // Return cleanup function
       const cleanup = () => {
         const idx = bindings.indexOf(binding);
         if (idx > -1) bindings.splice(idx, 1);
 
-        // Remove binding id from depMap arrays
         for (const d of deps) {
           const arr = depMap.get(d);
           if (arr) {
@@ -363,7 +323,6 @@ export function component<S>(
           }
         }
 
-        // Remove from registry
         bindingRegistry.delete(id);
       };
 
@@ -371,16 +330,12 @@ export function component<S>(
       return cleanup;
     }
 
-    // Walk the DOM and setup bindings
-    // Collect dynamic parts inside a subtree (used for per-item aggregation)
     function collectDynamicParts(root: Element) {
       const parts: Array<any> = [];
 
-      // Text nodes with {expr} - walk the subtree manually (TreeWalker/NodeFilter not available in some test DOMs)
       function walkText(n: Node) {
         if (n.nodeType === (Node as any).ELEMENT_NODE) {
           const el = n as Element;
-          // Skip subtrees that have their own directives or are child components
           if (el.hasAttribute('for') || el.hasAttribute('if')) return;
           const childTag = el.tagName.toLowerCase();
           if (components[childTag] && childTag !== tag) return;
@@ -399,7 +354,6 @@ export function component<S>(
 
       walkText(root as unknown as Node);
 
-      // Attributes treated as expressions (exclude directives and events)
       const elems = root.querySelectorAll('*');
       elems.forEach(el => {
         el.getAttributeNames().forEach(attr => {
@@ -414,20 +368,17 @@ export function component<S>(
       return parts;
     }
 
-    // Add this helper function inside the factory (before `walk`)
     function processEvents(el: HTMLElement, context: Record<string, any>) {
       el.getAttributeNames().forEach(attr => {
         if (!attr.startsWith('on:')) return;
         const eventName = attr.slice(3);
         const expr = el.getAttribute(attr)?.trim();
         if (!expr) return;
-        // Capture only the local context keys to avoid enumerating the state proxy.
         const capturedContext = { ...context };
         const paramKeys = [...Object.keys(capturedContext), 'event'];
 
         const handler = (e: Event) => {
           try {
-            // Bind functions to stateProxy and provide event as last arg
             const values = [
               ...Object.values(capturedContext).map(v => (typeof v === 'function' ? v.bind(stateProxy) : v)),
               e
@@ -443,7 +394,6 @@ export function component<S>(
 
         el.addEventListener(eventName, handler);
 
-        // Cleanup event listener
         cleanups.push(() => {
           el.removeEventListener(eventName, handler);
         });
@@ -462,17 +412,13 @@ export function component<S>(
         attrExprs.push({ attr, expr: raw });
       });
 
-      // Aggregate attribute expressions into a single binding
       if (attrExprs.length > 0) {
-        // Set up two-way binding for bind attributes
         for (const { attr, expr } of attrExprs) {
           if (attr === 'bind') {
             let expression = expr;
             
-            // Check if this element has form inputs as children (automatic form binding)
             const formInputs = el.querySelectorAll('input[name], select[name], textarea[name]');
             if (formInputs.length > 0) {
-              // Automatic form binding - set bind attributes on inputs
               formInputs.forEach((input: Element) => {
                 const inputName = input.getAttribute('name');
                 if (inputName && !input.hasAttribute('bind')) {
@@ -480,7 +426,6 @@ export function component<S>(
                 }
               });
             } else {
-              // Individual input binding (should not happen here anymore, but keep for compatibility)
               const elInput = el as HTMLInputElement;
               if (el.tagName === 'INPUT' && elInput.type === 'radio') {
                 el.addEventListener('input', (e) => {
@@ -498,7 +443,6 @@ export function component<S>(
                 });
               }
               
-              // Set up binding from state to input
               bind(() => {
                 const value = evaluate(expression, context);
                 if (el.tagName === 'INPUT' && elInput.type === 'radio') {
@@ -513,14 +457,12 @@ export function component<S>(
           }
         }
         
-        // Check for automatic binding from parent
         if (!attrExprs.some(({ attr }) => attr === 'bind') && el.hasAttribute('name')) {
           const parentBind = el.parentElement?.getAttribute('bind');
           if (parentBind) {
             const expression = `${parentBind}.${el.getAttribute('name')}`;
             const elInput = el as HTMLInputElement;
             
-            // Set up event listener
             if (el.tagName === 'INPUT' && elInput.type === 'radio') {
               el.addEventListener('input', (e) => {
                 if ((e.target as HTMLInputElement).checked) {
@@ -537,7 +479,6 @@ export function component<S>(
               });
             }
             
-            // Set up binding from state to input
             bind(() => {
               const value = evaluate(expression, context);
               if (el.tagName === 'INPUT' && elInput.type === 'radio') {
@@ -570,7 +511,6 @@ export function component<S>(
               if (match) {
                 expression = match[1].trim();
               } else {
-                // For non-expression attributes, treat as literal
                 const result = evaluate(expression, context);
                 if (result !== undefined) {
                   if (booleanAttrs.has(attr)) {
@@ -617,7 +557,6 @@ export function component<S>(
       if (node.nodeType !== Node.ELEMENT_NODE) return;
       const el = node as HTMLElement;
 
-      // Handle 'if' directive
       if (el.hasAttribute('if')) {
         const expr = el.getAttribute('if')!.trim();
         const placeholder = document.createComment(`if:${expr}`);
@@ -648,7 +587,6 @@ export function component<S>(
         return;
       }
 
-      // Handle 'for' directive
       if (el.hasAttribute('for')) {
         const forExpr = el.getAttribute('for')!.trim();
         const match = forExpr.match(/^(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)$/);
@@ -657,8 +595,6 @@ export function component<S>(
           const [, itemVar, indexVar, arrayExpr] = match;
           const placeholder = document.createComment(`for:${forExpr}`);
           const template = el.cloneNode(true) as Element;
-          // Optional optimization attribute to enable O(1) selected-item toggles.
-          // Usage: <li for="item, i in items" selected-by="selected"> ... </li>
           const selectedBy = el.getAttribute('selected-by');
           template.removeAttribute('for');
           template.removeAttribute('selected-by');
@@ -672,8 +608,6 @@ export function component<S>(
             const array = evaluate(arrayExpr, context);
             if (!Array.isArray(array)) return;
 
-            // Check for a recent array op recorded by the proxy wrapper. If it's a simple append/remove,
-            // perform incremental DOM updates instead of full re-render.
             const rootKey = (arrayExpr.split('.')[0]) as string;
             const opInfo = pendingArrayOps.get(rootKey);
 
@@ -682,7 +616,6 @@ export function component<S>(
               const op = opInfo.op;
 
               if (op === 'push') {
-                // Append new items for each arg
                 const parent = placeholder.parentNode!;
                 for (let a = 0; a < opInfo.args.length; a++) {
                   const i = array.length - opInfo.args.length + a;
@@ -714,16 +647,12 @@ export function component<S>(
                       }
                     };
                     bind(updateItem, itemContext);
-                    // Ensure event attributes on the clone are attached
                     processEvents(clone as HTMLElement, itemContext);
-                    // Walk child nodes for nested directives
                     Array.from((clone as Element).childNodes).forEach(child => walk(child, itemContext));
                   } else {
-                    // Ensure event attributes on the clone are attached and process children
                     processEvents(clone as HTMLElement, itemContext);
                     walk(clone, itemContext);
                   }
-                  // Insert after last rendered node (append). If none, insert after placeholder.
                   if (rendered.length > 0) {
                     const last = rendered[rendered.length - 1];
                     last.parentNode?.insertBefore(clone, (last as Node).nextSibling);
@@ -731,9 +660,6 @@ export function component<S>(
                     parent.insertBefore(clone, placeholder.nextSibling);
                   }
 
-                  // selected-by: simple per-clone binding that updates className when the
-                  // selected state key changes. This is simpler and avoids optimized index
-                  // bookkeeping.
                   if (selectedBy && indexVar) {
                     const stateKey = selectedBy.trim();
                     try {
@@ -757,7 +683,6 @@ export function component<S>(
               }
 
               if (op === 'pop') {
-                // Remove last node
                 const last = rendered.pop();
                 if (last) {
                   const hn = last as any as HTMLElement;
@@ -766,12 +691,10 @@ export function component<S>(
                 return true;
               }
 
-              // For other ops (shift/unshift/splice/sort/reverse) do full re-render
               return false;
             };
 
             if (!tryIncremental()) {
-              // Full re-render fallback
               for (const n of rendered) {
                 const hn = n as any as HTMLElement;
                 hn.remove();
@@ -815,9 +738,7 @@ export function component<S>(
 
                   bind(updateItem, itemContext);
                   Array.from((clone as Element).childNodes).forEach(child => walk(child, itemContext));
-                  // Ensure event attributes are attached for the clone
                   processEvents(clone as HTMLElement, itemContext);
-                  // selected-by: per-clone binding for full render
                   if (selectedBy && indexVar) {
                     const stateKey = selectedBy.trim();
                     bind(() => {
@@ -863,7 +784,6 @@ export function component<S>(
         }
       }
 
-      // Handle 'show' directive
       if (el.hasAttribute('show')) {
         const expr = el.getAttribute('show')!.trim();
         el.removeAttribute('show');
@@ -880,15 +800,12 @@ export function component<S>(
         }, context);
       }
 
-      // Handle 'bind' directive
       if (el.hasAttribute('bind')) {
         const key = el.getAttribute('bind')!.trim();
         el.removeAttribute('bind');
 
-        // Check if this element has form inputs as children (automatic form binding)
         const formInputs = el.querySelectorAll('input[name], select[name], textarea[name]');
         if (formInputs.length > 0) {
-          // Automatic form binding - set up bindings for inputs
           formInputs.forEach((input: Element) => {
             const inputEl = input as HTMLElement;
             const inputName = input.getAttribute('name');
@@ -902,7 +819,6 @@ export function component<S>(
                 if (parent) parent[last] = val;
               };
 
-              // Initial value
               const initialValue = getValue();
               if (inputEl instanceof HTMLInputElement) {
                 if (inputEl.type === 'checkbox') inputEl.checked = !!initialValue;
@@ -912,7 +828,6 @@ export function component<S>(
                 inputEl.value = initialValue ?? '';
               }
 
-              // State -> DOM
               bind(() => {
                 const value = getValue();
                 if (inputEl instanceof HTMLInputElement) {
@@ -924,7 +839,6 @@ export function component<S>(
                 }
               }, context);
 
-              // DOM -> State
               const updateState = (e: Event) => {
                 const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
                 if (target instanceof HTMLInputElement) {
@@ -937,7 +851,6 @@ export function component<S>(
               inputEl.addEventListener('input', updateState);
               inputEl.addEventListener('change', updateState);
               
-              // Cleanup event listeners
               cleanups.push(() => {
                 inputEl.removeEventListener('input', updateState);
                 inputEl.removeEventListener('change', updateState);
@@ -945,7 +858,6 @@ export function component<S>(
             }
           });
         } else {
-          // Individual element binding
           const getValue = () => key.split('.').reduce((acc: any, k) => acc?.[k], stateProxy);
           const setValue = (val: any) => {
             const keys = key.split('.');
@@ -954,7 +866,6 @@ export function component<S>(
             if (parent) parent[last] = val;
           };
 
-          // Initial value
           const initialValue = getValue();
           if (el instanceof HTMLInputElement) {
             if (el.type === 'checkbox') el.checked = !!initialValue;
@@ -964,7 +875,6 @@ export function component<S>(
             el.value = initialValue ?? '';
           }
 
-          // State -> DOM
           bind(() => {
             const value = getValue();
             if (el instanceof HTMLInputElement) {
@@ -976,7 +886,6 @@ export function component<S>(
             }
           }, context);
 
-          // DOM -> State
           const updateState = (e: Event) => {
             const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
             if (target instanceof HTMLInputElement) {
@@ -991,7 +900,6 @@ export function component<S>(
           el.addEventListener('input', updateState);
           el.addEventListener('change', updateState);
           
-          // Cleanup event listeners
           cleanups.push(() => {
             el.removeEventListener('input', updateState);
             el.removeEventListener('change', updateState);
@@ -999,7 +907,6 @@ export function component<S>(
         }
       }
 
-      // Handle child components
       const childTag = el.tagName.toLowerCase();
       if (components[childTag] && childTag !== tag) {
         const childInputs: Record<string, any> = {};
@@ -1012,10 +919,6 @@ export function component<S>(
             const expr = el.getAttribute(attr)?.trim();
             if (expr) {
               const handlerFn = (e: Event) => {
-                // Avoid enumerating `stateProxy` (spreading the proxy triggers traps and
-                // registers unwanted dependencies). Instead pass only captured context keys
-                // plus `event` as parameters; the function runs with `this=stateProxy` so
-                // unqualified identifiers still resolve to properties on the state proxy.
                 try {
                   const captured = { ...context };
                   const keys = [...Object.keys(captured), 'event'];
@@ -1055,7 +958,6 @@ export function component<S>(
 
         const childInstance = components[childTag](childInputs);
 
-        // Aggregate child input bindings into a single binding to reduce work
         if (childBindings.length > 0) {
           bind(() => {
             for (const { key, expr } of childBindings) {
@@ -1068,7 +970,6 @@ export function component<S>(
         }
 
         childEvents.forEach(({event, handler}) => {
-          // Attach listeners to child root and ensure cleanup removes from the same element
           childInstance.root.addEventListener(event, handler);
           cleanups.push(() => {
             childInstance.root.removeEventListener(event, handler);
@@ -1081,18 +982,14 @@ export function component<S>(
         return;
       }
 
-      // Handle event bindings
       processEvents(el, context);
-      // Collect attributes and events. Attributes are treated as expressions (original behavior)
       processAttributes(el, context);
 
-      // Recurse into children
       Array.from(el.childNodes).forEach(child => walk(child, context));
     }
 
     walk(root);
 
-    // Emit helper
     Object.defineProperty(stateProxy, 'emit', {
       value: (name: string, detail?: any) => {
         root.dispatchEvent(new CustomEvent(name, { detail, bubbles: true }));
@@ -1109,7 +1006,6 @@ export function component<S>(
           target.appendChild(root);
         }
         
-        // Flush any pending updates from initialization
         flushUpdates();
         
         if ('mounted' in stateProxy && typeof (stateProxy as any).mounted === 'function') {
@@ -1120,11 +1016,9 @@ export function component<S>(
       unmount() {
         root.remove();
         
-        // Run all cleanup functions
         cleanups.forEach(cleanup => cleanup());
         cleanups.length = 0;
         
-        // Clear all bindings
         bindings.length = 0;
         
         if ('unmounted' in stateProxy && typeof (stateProxy as any).unmounted === 'function') {

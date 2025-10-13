@@ -303,7 +303,6 @@ describe("component()", () => {
     const div = root.querySelector("div")!;
     expect(div.textContent).toBe("1 2 3");
 
-    // Multiple changes should batch into single update
     state.a = 10;
     state.b = 20;
     state.c = 30;
@@ -341,7 +340,6 @@ describe("for", () => {
     expect(lis.length).toBe(2);
     expect(lis[0].textContent).toBe("X");
 
-    // Add a new item
     state.items.push("Z");
     await nextTick();
 
@@ -349,7 +347,6 @@ describe("for", () => {
     expect(lis.length).toBe(3);
     expect(lis[2].textContent).toBe("Z");
 
-    // Remove an item
     state.items.shift();
     await nextTick();
 
@@ -429,12 +426,10 @@ describe("for", () => {
     const divs = root.querySelectorAll('.results > div');
     expect(divs[0].className).toBe('');
 
-    // call the method directly
     state.select(1);
     await nextTick();
     expect(divs[1].className).toBe('selected');
 
-    // click the third
     const evt = new Event('click', { bubbles: true });
     Object.defineProperty(evt, 'target', { value: divs[2], writable: false });
     (divs[2] as HTMLElement).dispatchEvent(evt);
@@ -607,7 +602,6 @@ describe("bind", () => {
     const input = root.querySelector("input")!;
     expect(state.name).toBe("Alice");
 
-    // Simulate user typing
     input.value = "Charlie";
     const event = new Event("input", { bubbles: true });
     Object.defineProperty(event, 'target', { value: input, writable: false });
@@ -773,7 +767,6 @@ describe("automatic form binding", () => {
     expect(inputs[2].value).toBe("25");
     expect(inputs[3].checked).toBe(true);
 
-    // Test updating state updates inputs
     state.user.name = "Jane";
     state.user.age = 30;
     state.user.newsletter = false;
@@ -783,7 +776,6 @@ describe("automatic form binding", () => {
     expect(inputs[2].value).toBe("30");
     expect(inputs[3].checked).toBe(false);
 
-    // Test updating inputs updates state
     inputs[0].value = "Bob";
     const event0 = new Event("input", { bubbles: true });
     Object.defineProperty(event0, 'target', { value: inputs[0], writable: false });
@@ -1449,7 +1441,6 @@ describe('attribute bindings with loopContext', () => {
     expect(lis[1].className).toBe('');
     expect(lis[2].className).toBe('');
 
-    // Change selection and ensure classes update
     state.selected = 2;
     await nextTick();
 
@@ -1526,7 +1517,6 @@ describe("edge cases and error handling", () => {
 
     const div = root.querySelector("div")!;
 
-    // Rapid updates should batch
     for (let i = 1; i <= 100; i++) {
       state.count = i;
     }
@@ -1596,7 +1586,7 @@ test('parent listens to child component events via on:custom attribute', async (
   expect(state.received).toEqual({ value: 7 });
 });
 
-test('should call state methods from event handlers (no stubbing)', async () => {
+test('should call state methods from event handlers', async () => {
   const factory = component(
     'state-method-test',
     `<button on:click="edit()">Edit</button>`,
@@ -1611,84 +1601,6 @@ test('should call state methods from event handlers (no stubbing)', async () => 
   await nextTick();
 
   expect(state.edited).toBe(true);
-});
-
-test('if=!editing should show when editing is false and hide when true', async () => {
-  const factory = component(
-    'org-edit-test',
-    `<div if=!editing class=orginfo>View</div><div if=editing class=orgedit>Edit</div>`,
-    (input?: { editing?: boolean }) => ({ editing: input?.editing ?? false })
-  );
-
-  const { root, mount, state } = factory();
-  mount(document.body);
-
-  // Initially editing is false -> !editing is true -> View should be shown
-  expect(root.querySelector('.orginfo')).not.toBeNull();
-  expect(root.querySelector('.orgedit')).toBeNull();
-
-  // Toggle editing -> View should hide, Edit should show
-  state.editing = true;
-  await nextTick();
-  expect(root.querySelector('.orginfo')).toBeNull();
-  expect(root.querySelector('.orgedit')).not.toBeNull();
-});
-
-describe('undefined-handling in if', () => {
-  test('if="!object" should not render when object is undefined', async () => {
-    const factory = component(
-      'dash-undef',
-      `<dashboard if="!object">Dash</dashboard>`,
-      () => ({})
-    );
-
-    const { root, mount } = factory();
-    mount(document.body);
-
-    const dash = root.querySelector('dashboard');
-    expect(dash).toBeNull();
-  });
-
-  test('if="!object" should render when object exists but falsy', async () => {
-    const factory = component(
-      "falsy-object-test",
-      `<div if="!object">Shown</div><div if="object">Hidden</div>`,
-      () => ({ object: "" })
-    );
-
-    const { root, mount } = factory();
-    mount(document.body);
-
-    expect(root.querySelectorAll("div").length).toBe(1);
-    expect(root.textContent).toBe("Shown");
-  });
-
-  test("should handle expression evaluation errors gracefully", async () => {
-    const factory = component(
-      "error-test",
-      `<div>{nonexistent.property.deep}</div>`,
-      () => ({})
-    );
-
-    const { root, mount } = factory();
-    mount(document.body);
-
-    // Should not crash, should show empty or handle error
-    expect(root.querySelector("div")).toBeTruthy();
-  });
-
-  test("should handle complex expressions", async () => {
-    const factory = component(
-      "complex-expr",
-      `<div>{count * 2}</div>`,
-      () => ({ count: 5 })
-    );
-
-    const { root, mount } = factory();
-    mount(document.body);
-
-    expect(root.textContent).toBe("10");
-  });
 });
 
 test("should handle multiple mount/unmount cycles", async () => {

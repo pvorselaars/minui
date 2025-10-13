@@ -1,9 +1,0 @@
-:root{font-family:Inter,Segoe UI,Arial, Helvetica, sans-serif;color:#222}
-body{margin:0;padding:1rem;background:#f7f9fc}
-main{max-width:980px;margin:0 auto;background:#fff;padding:1rem 1.25rem;border-radius:8px;box-shadow:0 6px 20px rgba(2,6,23,0.06)}
-.controls{display:flex;gap:.5rem;align-items:center;margin-bottom:1rem}
-select,button{padding:.4rem .6rem;border-radius:6px;border:1px solid #d5dbe6;background:#fff}
-#meta{margin-left:1rem;color:#666;font-size:.9rem}
-.charts h2{margin-top:1rem}
-canvas{background:#fff;border-radius:6px;padding:6px}
-footer{margin-top:1rem;color:#888;font-size:.85rem}
